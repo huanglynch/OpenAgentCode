@@ -1,7 +1,6 @@
 # OpenAgentCode
 An AI agent for developer tasks, integrating LLM, RAG, and tools.
 
-```markdown
 # OpenAgentCode (OAC)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -84,4 +83,4 @@ OpenAgentCode (OAC) 是一个基于 AI 的代理工具，旨在帮助开发者�
 MIT 许可证。见 [LICENSE](LICENSE)。
 
 </details>
-```
+
