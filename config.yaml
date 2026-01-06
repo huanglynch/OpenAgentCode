@@ -1,0 +1,73 @@
+github:
+  owner: ''
+  repo: ''
+  token: ''
+languages:
+  default: python
+  supported:
+  - python
+  - cpp
+  - c
+  - js
+  - java
+  - cs
+  - go
+llm:
+  api_key: $XAI_API_KEY$
+  endpoint: http://localhost:8080/api/chat/completions
+  endpoint_ollama: http://localhost:11434/v1/chat/completions
+  endpoint_vllm: http://localhost:8080/api/chat/completions
+  endpoint_xai: http://localhost:8000/api/chat/completions
+  vision_model: qwen3-vl
+  endpoint_vision: http://localhost:8080/api/chat/completions
+  max_tokens: 32768
+  model: Qwen3:235b
+  temperature: 0.6
+models:
+- vllm,Qwen3:235b
+- vllm,AI:qwen3-vl
+- ollama,GPT-OSS:20b
+- xai,grok-4-1-fast-non-reasoning
+modes:
+  default: code
+paths:
+  context_file: AGENT.md
+  embed_cache_dir: cached_models/
+  help_file: help.md
+  prompts_file: prompts.yaml
+  tools_dir: .agent/tools/
+permissions:
+  exec_bash: false
+  file_read: true
+  file_write: true
+  git_commit: false
+  github_api: false
+rag:
+  chunk_size: 384
+  embedding_model: all-mpnet-base-v2
+  hybrid_alpha: 0.4
+  index_refresh_interval: 300
+  rerank_enabled: true
+  top_k: 8
+tasks_optimizations:
+  debug:
+    chunk_method: function
+    rerank_prompt: 'Rank snippets by relevance to bug: {error_desc}'
+  design:
+    template: 'Design architecture: UML text, components, in {lang}.'
+  doc:
+    chunk_method: section
+    rerank_prompt: Rank by redundancy and clarity for doc optimization
+  optimize:
+    template: 'Optimize code/doc: performance, readability, refactor suggestions.'
+  requirements:
+    template: 'Generate requirements.md: functional, non-functional, constraints.'
+  ut:
+    post_validate: true
+    query_expand: Retrieve similar tests and coverage for {func} in {lang}
+timeouts:
+  bash_exec: 600
+  compile: 600
+  llm_request: 600
+  tool_execution: 600
+  unit_test: 600

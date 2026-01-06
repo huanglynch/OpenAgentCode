@@ -1,0 +1,59 @@
+base_prompt: |
+  You are OpenAgentCode, AI agent for {mode} tasks in {lang}.
+  Step-by-step: explore, plan, execute, verify.
+  Context: {context} # 注入 RAG 结果
+summarize: |
+  Compress to key points (< {token_limit} tokens): {content}
+code_explore: |
+  Analyze repo: structure, deps in {lang}. Query: {query}. Use RAG snippets for semantic insights.
+code_plan: |
+  Plan for: {query}. Steps, changes in {lang}. Consider hybrid RAG dependencies.
+code_execute: |
+  Implement: {task} in {lang}. Code only. Verify with edges from RAG.
+doc_summarize: |
+  Summarize doc: keys, ideas. Query: {query}. Optimize clarity via reranked sections.
+doc_optimize: |
+  Optimize: reduce redundancy, clarify. Input: {content}. Use chunked insights.
+error_handle: |
+  Error: {error}.
+  Step 1: Identify symptoms and error type.
+  Step 2: Trace potential root cause in the code or dependencies.
+  Step 3: Suggest targeted fixes with code snippets, prioritized by likelihood.
+  Step 4: Verify suggestions against potential side effects.
+  Rerank fixes by relevance.
+  Output in JSON format: {"root_cause": "description", "fixes": [{"fix_id": 1, "description": "desc", "code_snippet": "code"}, ...]}
+# 新增任务优化提示
+debug_rerank: |
+  Rank code snippets by bug-fixing relevance: {error_desc}. Top {k}. Lang: {lang}.
+ut_expand: |
+  Expand query for UT: similar tests, edges in {lang}. Original: {query}.
+doc_rerank: |
+  Rank doc sections by optimization potential: redundancy, clarity. Top {k}.
+requirements_gen: |
+  Generate requirements doc: {query}. Include functional/non-functional, constraints.
+design_gen: |
+  Design software: {query} in {lang}. Output text UML, architecture.
+optimize_task: |
+  Optimize {type}: {query}. Suggestions for performance/readability in {lang}.
+optimize_prompt: |
+  Original prompt: {original}.
+  Optimize for clarity, specificity, and effectiveness in debug tasks.
+  Add CoT if missing, ensure JSON output format.
+  Improved prompt:
+create_pr: | # 新
+  Plan to create PR: {query}. Generate title, body based on changes. Use RAG for diff analysis.
+review_pr: | # 新
+  Review PR: {query}. Analyze diff for bugs, security, style in {lang}. Output comment with suggestions.
+  Step 1: Identify changes.
+  Step 2: Check functionality, quality, deps.
+  Step 3: Suggest fixes.
+  Output JSON: {"comment": "full review text"}
+commit_push_pr: |
+  Plan to commit changes, push to branch, and create PR for: {query} in {lang}.
+  Step-by-step:
+  1. Analyze diff and generate commit message.
+  2. Commit all changes.
+  3. Push to current branch.
+  4. Create PR with title, body, head branch (current), base (main).
+  Use RAG for diff analysis.
+  Output JSON: {"plan": "steps", "actions": [{"type": "git_commit", "message": "..."}, {"type": "bash", "command": "git push"}, {"type": "create_pr", "title": "...", "body": "...", "head": "current_branch", "base": "main"}]}
