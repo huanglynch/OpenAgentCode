@@ -20,7 +20,7 @@ OpenAgentCode (OAC) is an AI-powered agent tool designed to assist developers wi
 ## Installation
 1. Clone the repo:
    ```
-   git clone https://github.com/您的用户名/OpenAgentCode.git
+   git clone https://github.com/huanglynch/OpenAgentCode.git
    cd OpenAgentCode
    ```
 2. Install dependencies:
@@ -62,7 +62,7 @@ OpenAgentCode (OAC) 是一个基于 AI 的代理工具，旨在帮助开发者�
 ## 安装
 1. 克隆仓库：
    ```
-   git clone https://github.com/您的用户名/OpenAgentCode.git
+   git clone https://github.com/huanglynch/OpenAgentCode.git
    cd OpenAgentCode
    ```
 2. 安装依赖：
