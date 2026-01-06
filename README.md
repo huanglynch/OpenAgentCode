@@ -1,5 +1,6 @@
 # OpenAgentCode
 An AI agent for developer tasks, integrating LLM, RAG, and tools.
+Supports Ollama, vLLM for local/intranet, and cloud APIs.
 
 # OpenAgentCode (OAC)
 
