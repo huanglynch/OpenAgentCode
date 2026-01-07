@@ -11,6 +11,7 @@ from agent import Agent
 from context import ContextManager
 
 DEFAULT_CONFIG = {
+    'workspace': './workspace',  # 新增默认工作目录配置
     'llm': {
         'endpoint': "http://localhost:8000/api/chat",
         'model': "AI:Pro",
@@ -115,9 +116,26 @@ def main(prompt, mode, headless, lang, chat):
     else:
         print(format_markdown(result))
 
+
 def load_config():
     with open('config.yaml', 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
+
+    # 处理工作目录设置
+    workspace_dir = config.get('workspace', './workspace')
+    if not os.path.exists(workspace_dir):
+        os.makedirs(workspace_dir, exist_ok=True)
+        print(f"Created workspace directory: {workspace_dir}")
+
+    # 切换到工作目录
+    original_cwd = os.getcwd()
+    os.chdir(workspace_dir)
+    print(f"Working directory: {os.getcwd()}")
+
+    # 存储原始目录以备后用
+    config['_original_cwd'] = original_cwd
+    config['_current_workspace'] = workspace_dir
+
     api_key = config['llm'].get('api_key', '')
     original_api_key = api_key  # 保存原始值
     if api_key.startswith('os.environ/'):
@@ -131,7 +149,7 @@ def load_config():
     if not config['llm']['api_key']:
         print("Warning: API key not found in environment.")
     if original_api_key and (original_api_key.startswith('$') or original_api_key.startswith('os.environ/')) and not \
-       config['llm']['api_key']:
+            config['llm']['api_key']:
         print(f"Warning: Environment variable for api_key ({env_var}) not found.")
     # 新增：兼容allowed_bash_commands
     if 'permissions' in config and 'allowed_bash_commands' not in config['permissions']:
@@ -209,20 +227,42 @@ def interactive_mode(agent, mode, headless, lang, config):  # 添加 config 参�
         except Exception as e:
             print(f"Error: {e}")
 
+
 def interactive_chat(config):
-    print("Chat Mode: Converse with AI directly. Commands: /exit, /quit, /help, /config, /status, /model, /clear, /rag <query>")
+    print(
+        "Chat Mode: Converse with AI directly. Commands: /exit, /quit, /help, /config, /status, /model, /clear, /rag <query>, /workspace [path]")
     history = []
+
+    # 为聊天模式创建临时 agent（用于 workspace 切换时重建索引）
+    temp_agent = None
+
     while True:
         try:
             user_input = input("You: ")
             if not user_input.strip():
                 continue
+
             if user_input.lower() in ['/exit', '/quit']:
                 print("Goodbye!")
                 break
+
             if user_input.startswith('/'):
                 command = user_input[1:].strip()
                 cmd_lower = command.lower()
+
+                # 处理 workspace 命令
+                if cmd_lower.startswith('workspace'):
+                    # 为 workspace 切换创建临时 agent
+                    if not temp_agent:
+                        from agent import Agent
+                        from context import ContextManager
+                        prompts = load_prompts()
+                        context_manager = ContextManager(config)
+                        temp_agent = Agent(config, prompts, context_manager)
+
+                    handle_workspace_command(command, config, temp_agent)
+                    continue
+
                 if cmd_lower.startswith('model'):
                     parts = command.split()
                     if len(parts) > 1:
@@ -234,14 +274,17 @@ def interactive_chat(config):
                             if endpoint_key in config['llm']:
                                 config['llm']['endpoint'] = config['llm'][endpoint_key]
                                 config['llm']['model'] = model_name
-                                print(f"Switched to model {model_name} with {endpoint_type} endpoint: {config['llm']['endpoint']}")
+                                print(
+                                    f"Switched to model {model_name} with {endpoint_type} endpoint: {config['llm']['endpoint']}")
                                 # 保存配置变更到文件，确保 api_key 不写入实际值
                                 temp_api_key = config['llm']['api_key']
                                 config['llm']['api_key'] = config['llm']['_original_api_key']
-                                print(yaml.dump(config, default_flow_style=False))
-                                with open('config.yaml', 'w', encoding='utf-8') as f:
+
+                                # 保存到原始目录的配置文件
+                                config_path = os.path.join(config.get('_original_cwd', '.'), 'config.yaml')
+                                with open(config_path, 'w', encoding='utf-8') as f:
                                     yaml.dump(config, f, default_flow_style=False)
-                                config['llm']['api_key'] = temp_api_key # 恢复内存
+                                config['llm']['api_key'] = temp_api_key  # 恢复内存
                             else:
                                 print(f"Endpoint for {endpoint_type} not defined in config.")
                         else:
@@ -250,6 +293,7 @@ def interactive_chat(config):
                         print("Usage: /model [endpoint_type,model_name]")
                         print(f"Available models: {', '.join(config.get('models', []))}")
                     continue
+
                 elif cmd_lower.startswith('rag'):
                     query = command[3:].strip()
                     if not query:
@@ -261,7 +305,8 @@ def interactive_chat(config):
                     context_manager = ContextManager(config)
                     rag = VectorRAG(config)
                     # 执行搜索
-                    rag_results = rag.search(query, config['rag']['top_k'], config['modes']['default'], config['languages']['default'])
+                    rag_results = rag.search(query, config['rag']['top_k'], config['modes']['default'],
+                                             config['languages']['default'])
                     # 注入 RAG 结果（复制 agent.inject_rag_results 逻辑）
                     injected = []
                     for path in rag_results:
@@ -299,7 +344,9 @@ def interactive_chat(config):
                             continue
                     injected_rag = '\n'.join(injected)
                     # 构建 messages with RAG context
-                    messages = [{'role': 'system', 'content': 'You are a helpful assistant. Use the following context to answer the query:\n' + injected_rag}] + history + [{'role': 'user', 'content': query}]
+                    messages = [{'role': 'system',
+                                 'content': 'You are a helpful assistant. Use the following context to answer the query:\n' + injected_rag}] + history + [
+                                   {'role': 'user', 'content': query}]
                     # 设置 model 和 endpoint (非视觉)
                     model = config['llm']['model']
                     endpoint = config['llm']['endpoint']
@@ -343,38 +390,51 @@ def interactive_chat(config):
                         print("AI:", content)
                     history.append({'role': 'assistant', 'content': content})
                     continue
-                else:
-                    # 临时创建 agent
-                    from agent import Agent
-                    from context import ContextManager
-                    prompts = load_prompts()
-                    context_manager = ContextManager(config)
-                    agent = Agent(config, prompts, context_manager)
-                    handle_slash_command(agent, command, mode='code', lang=None, config=config)
+
+                elif cmd_lower in ['help', 'config', 'status', 'clear']:
+                    # 为其他命令创建临时 agent
+                    if not temp_agent:
+                        from agent import Agent
+                        from context import ContextManager
+                        prompts = load_prompts()
+                        context_manager = ContextManager(config)
+                        temp_agent = Agent(config, prompts, context_manager)
+
+                    handle_slash_command(temp_agent, command, mode='code', lang=None, config=config)
                     continue
+
+                else:
+                    print(f"Unknown command: /{command}")
+                    print("Available commands: /exit, /quit, /help, /config, /status, /model, /clear, /rag, /workspace")
+                    continue
+
             # 新增: 检查图片输入
             image_url = None
             image_base64 = None
             text_content = user_input
+
             # 检查是否包含 URL
-            if 'http' in user_input and any(user_input.lower().endswith(ext) for ext in ['.jpg', '.png', '.gif', '.jpeg']):
+            if 'http' in user_input and any(
+                    user_input.lower().endswith(ext) for ext in ['.jpg', '.png', '.gif', '.jpeg']):
                 parts = user_input.rsplit('http', 1)
                 if len(parts) == 2:
                     text_content = parts[0].strip()
                     image_url = 'http' + parts[1].strip()
             # 否则检查本地路径
             elif any(user_input.lower().endswith(ext) for ext in ['.jpg', '.png', '.gif', '.jpeg']):
-                parts = user_input.rsplit(' ', 1) # 假设 "Describe: /path/to/image.jpg"
+                parts = user_input.rsplit(' ', 1)  # 假设 "Describe: /path/to/image.jpg"
                 if len(parts) == 2 and os.path.exists(parts[1].strip()):
                     local_path = parts[1].strip()
                     text_content = parts[0].strip()
                     try:
                         with open(local_path, "rb") as image_file:
                             image_base64 = base64.b64encode(image_file.read()).decode('utf-8')
-                        mime_type = 'image/jpeg' if local_path.lower().endswith('.jpg') or local_path.lower().endswith('.jpeg') else 'image/png'
+                        mime_type = 'image/jpeg' if local_path.lower().endswith('.jpg') or local_path.lower().endswith(
+                            '.jpeg') else 'image/png'
                     except Exception as e:
                         print(f"Error reading local image: {e}")
                         continue
+
             # 构建 messages
             if image_url or image_base64:
                 model = config['llm'].get('vision_model', config['llm']['model'])
@@ -382,8 +442,10 @@ def interactive_chat(config):
                 if image_url:
                     image_content = {'type': 'image_url', 'image_url': {'url': image_url}}
                 else:
-                    image_content = {'type': 'image_url', 'image_url': {'url': f'data:{mime_type};base64,{image_base64}'}}
-                messages = [{'role': 'system', 'content': 'You are a helpful assistant with vision capabilities.'}] + history + [{
+                    image_content = {'type': 'image_url',
+                                     'image_url': {'url': f'data:{mime_type};base64,{image_base64}'}}
+                messages = [{'role': 'system',
+                             'content': 'You are a helpful assistant with vision capabilities.'}] + history + [{
                     'role': 'user',
                     'content': [
                         {'type': 'text', 'text': text_content},
@@ -393,7 +455,9 @@ def interactive_chat(config):
             else:
                 model = config['llm']['model']
                 endpoint = config['llm']['endpoint']
-                messages = [{'role': 'system', 'content': 'You are a helpful assistant.'}] + history + [{'role': 'user', 'content': user_input}]
+                messages = [{'role': 'system', 'content': 'You are a helpful assistant.'}] + history + [
+                    {'role': 'user', 'content': user_input}]
+
             history.append({'role': 'user', 'content': user_input})
             payload = {
                 'model': model,
@@ -405,6 +469,7 @@ def interactive_chat(config):
             headers = {}
             if config['llm'].get('api_key'):
                 headers['Authorization'] = f'Bearer {config["llm"]["api_key"]}'
+
             try:
                 response = requests.post(endpoint, json=payload, headers=headers, stream=True)
                 response.raise_for_status()
@@ -432,10 +497,73 @@ def interactive_chat(config):
                 content = response.json().get('choices', [{}])[0].get('message', {}).get('content', '')
                 print("AI:", content)
             history.append({'role': 'assistant', 'content': content})
+
         except KeyboardInterrupt:
             print("\nUse /exit to quit")
         except Exception as e:
             print(f"Error: {e}")
+
+
+def handle_workspace_command(command, config, agent=None):
+    """Handle workspace directory changes"""
+    parts = command.strip().split()
+
+    if len(parts) == 1:
+        # 显示当前工作目录
+        current_workspace = config.get('_current_workspace', './workspace')
+        print(f"Current workspace: {os.getcwd()}")
+        print(f"Configured workspace: {current_workspace}")
+        return
+
+    new_workspace = parts[1]
+
+    # 处理相对路径
+    if not os.path.isabs(new_workspace):
+        original_cwd = config.get('_original_cwd', os.getcwd())
+        new_workspace = os.path.join(original_cwd, new_workspace)
+
+    # 创建目录如果不存在
+    if not os.path.exists(new_workspace):
+        try:
+            os.makedirs(new_workspace, exist_ok=True)
+            print(f"Created workspace directory: {new_workspace}")
+        except Exception as e:
+            print(f"Failed to create workspace directory: {e}")
+            return
+
+    # 切换目录
+    try:
+        os.chdir(new_workspace)
+        print(f"Changed workspace to: {os.getcwd()}")
+
+        # 更新配置
+        config['workspace'] = new_workspace
+        config['_current_workspace'] = new_workspace
+
+        # 重建 RAG 索引 - 新增
+        if agent and hasattr(agent, 'rag'):
+            print("Rebuilding RAG index for new workspace...")
+            try:
+                agent.rag.build_index()
+                print("RAG index rebuilt successfully.")
+            except Exception as e:
+                print(f"Warning: Failed to rebuild RAG index: {e}")
+
+        # 保存到配置文件
+        temp_api_key = config['llm']['api_key']
+        config['llm']['api_key'] = config['llm']['_original_api_key']
+
+        config_path = os.path.join(config.get('_original_cwd', '.'), 'config.yaml')
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.dump(config, f, default_flow_style=False)
+
+        config['llm']['api_key'] = temp_api_key  # 恢复内存中的值
+
+        print("Workspace setting saved to config.yaml")
+
+    except Exception as e:
+        print(f"Failed to change workspace: {e}")
+
 
 def handle_slash_command(agent, command, mode, lang, config):
     """Handle slash commands"""
@@ -444,6 +572,10 @@ def handle_slash_command(agent, command, mode, lang, config):
     if cmd_lower == 'help':
         show_help(config)
         return
+    # Workspace command - 修改：传入 agent 参数
+    if cmd_lower.startswith('workspace'):
+        handle_workspace_command(command, config, agent)
+        return  # 删除了重复的 RAG 重建代码
     # Clear context
     if cmd_lower == 'clear':
         agent.context_manager.clear()
@@ -488,7 +620,7 @@ def handle_slash_command(agent, command, mode, lang, config):
         result = agent.infer(task, mode=mode, lang=lang)
         print(format_markdown(result))
         return
-    # 新命令：/model
+    # 新命令：/model - 修正配置文件保存路径
     if cmd_lower.startswith('model'):
         parts = command.split()
         if len(parts) > 1:
@@ -504,8 +636,10 @@ def handle_slash_command(agent, command, mode, lang, config):
                     # 保存配置变更到文件，确保 api_key 不写入实际值
                     temp_api_key = config['llm']['api_key']
                     config['llm']['api_key'] = config['llm']['_original_api_key']
-                    print(yaml.dump(config, default_flow_style=False))
-                    with open('config.yaml', 'w', encoding='utf-8') as f:
+
+                    # 修正：使用原始目录
+                    config_path = os.path.join(config.get('_original_cwd', '.'), 'config.yaml')
+                    with open(config_path, 'w', encoding='utf-8') as f:
                         yaml.dump(config, f, default_flow_style=False)
                     config['llm']['api_key'] = temp_api_key  # 恢复内存
                 else:
@@ -516,7 +650,7 @@ def handle_slash_command(agent, command, mode, lang, config):
             print("Usage: /model [endpoint_type,model_name]")
             print(f"Available models: {', '.join(config.get('models', []))}")
         return
-    # 新增：permissions
+    # 新增：permissions - 修正配置文件保存路径
     if cmd_lower.startswith('permissions'):
         args = command[11:].strip()
         if args:
@@ -525,7 +659,10 @@ def handle_slash_command(agent, command, mode, lang, config):
             # 保存配置
             temp_api_key = config['llm']['api_key']
             config['llm']['api_key'] = config['llm']['_original_api_key']
-            with open('config.yaml', 'w', encoding='utf-8') as f:
+
+            # 修正：使用原始目录
+            config_path = os.path.join(config.get('_original_cwd', '.'), 'config.yaml')
+            with open(config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(config, f, default_flow_style=False)
             config['llm']['api_key'] = temp_api_key
             print(f"Added allowed bash command: {args}")
@@ -611,6 +748,7 @@ python cli.py "Your task here"
 ```
 ## Commands Reference
 ### Slash Commands
+
 | Command | Description |
 |---------|-------------|
 | `/help` | Display this help message |
@@ -618,6 +756,7 @@ python cli.py "Your task here"
 | `/clear` | Clear agent context history |
 | `/status` | Show current context status |
 | `/config` | Display current configuration |
+| `/workspace [path]` | Show or change workspace directory |
 | `/requirements` | Generate requirements.md |
 | `/design` | Generate design document |
 | `/optimize` | Optimize code or documentation |
@@ -626,6 +765,17 @@ python cli.py "Your task here"
 | `/model [endpoint_type,model_name]` | Switch to the specified LLM endpoint and model (e.g., /model vllm,AI:Pro). |
 | `/permissions [command]` | List or add allowed bash commands (if exec_bash is false) |
 | `/commit-push-pr [message]` | Commit, push, and create PR |
+
+### Workspace Management
+
+```bash
+/workspace                    # Show current workspace
+/workspace ./my-project      # Change to relative path
+/workspace /absolute/path    # Change to absolute path
+```
+
+The workspace directory is where all file operations occur. By default, it's `./workspace`.
+
 ### File Mentions
 Use `@filename` to include file contents:
 ```

@@ -12,22 +12,29 @@ languages:
   - java
   - cs
   - go
+
+workspace: ./workspace
+
 llm:
-  api_key: $XAI_API_KEY$
-  endpoint: http://localhost:8080/api/chat/completions
+  _original_api_key: $NVIDIA_API_KEY$
+  api_key: $NVIDIA_API_KEY$
+  api_key1: $XAI_API_KEY$
+  endpoint: https://integrate.api.nvidia.com/v1/chat/completions
+  endpoint_nvidia: https://integrate.api.nvidia.com/v1/chat/completions
   endpoint_ollama: http://localhost:11434/v1/chat/completions
-  endpoint_vllm: http://localhost:8080/api/chat/completions
+  endpoint_vision: http://localhost:11434/api/chat/completions
+  endpoint_vllm: http://localhost:11434/api/chat/completions
   endpoint_xai: http://localhost:8000/api/chat/completions
-  vision_model: qwen3-vl
-  endpoint_vision: http://localhost:8080/api/chat/completions
   max_tokens: 32768
-  model: Qwen3:235b
+  model: qwen/qwen3-next-80b-a3b-thinking
   temperature: 0.6
+  vision_model: AI:MM
 models:
-- vllm,Qwen3:235b
-- vllm,AI:qwen3-vl
-- ollama,GPT-OSS:20b
+- vllm,AI:Pro
+- vllm,AI:MM
+- ollama,qwen3:1.7b
 - xai,grok-4-1-fast-non-reasoning
+- nvidia,qwen/qwen3-next-80b-a3b-thinking
 modes:
   default: code
 paths:
@@ -37,6 +44,7 @@ paths:
   prompts_file: prompts.yaml
   tools_dir: .agent/tools/
 permissions:
+  allowed_bash_commands: []
   exec_bash: false
   file_read: true
   file_write: true

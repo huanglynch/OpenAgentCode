@@ -11,6 +11,7 @@ python cli.py "Your task here"
 ```
 ## Commands Reference
 ### Slash Commands
+
 | Command | Description |
 |---------|-------------|
 | `/help` | Display this help message |
@@ -18,6 +19,7 @@ python cli.py "Your task here"
 | `/clear` | Clear agent context history |
 | `/status` | Show current context status |
 | `/config` | Display current configuration |
+| `/workspace [path]` | Show or change workspace directory |
 | `/requirements` | Generate requirements.md |
 | `/design` | Generate design document |
 | `/optimize` | Optimize code or documentation |
@@ -26,6 +28,16 @@ python cli.py "Your task here"
 | `/model [endpoint_type,model_name]` | Switch to the specified LLM endpoint and model (e.g., /model vllm,AI:Pro). |
 | `/permissions [command]` | List or add allowed bash commands (if exec_bash is false) |
 | `/commit-push-pr [message]` | Commit, push, and create PR |
+
+### Workspace Management
+
+```bash
+/workspace                    # Show current workspace
+/workspace ./my-project      # Change to relative path
+/workspace /absolute/path    # Change to absolute path
+```
+
+The workspace directory is where all file operations occur. By default, it's `./workspace`.
 ### File Mentions
 Use `@filename` to include file contents:
 ```

@@ -38,6 +38,18 @@ class VectorRAG:
         self.build_index()
         if WATCHDOG_AVAILABLE and self.config['rag']['index_refresh_interval'] > 0:
             self.setup_watcher()
+
+    # 在 VectorRAG 类中添加
+    def rebuild_index(self):
+        """Clear and rebuild the entire index"""
+        print("Clearing existing RAG index...")
+        self.index.clear()
+        self.contents.clear()
+        self.paths.clear()
+
+        print("Rebuilding RAG index...")
+        self.build_index()
+
     def build_index(self):
         """Build vector and BM25 index for all files"""
         print("Building RAG index...")
