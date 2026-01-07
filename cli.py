@@ -932,35 +932,33 @@ def handle_slash_command(agent, command, mode, lang, config):
 def interactive_mode(agent, mode, headless, lang, config):
     """Interactive REPL mode"""
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("  OpenAgentCode Interactive Mode")
+    print(" OpenAgentCode Interactive Mode")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("Type /help for commands, /quit to exit")
     print()
-
     while True:
         try:
             prompt = input(">>> ").strip()
-
             if not prompt:
                 continue
-
             # Handle slash commands
             if prompt.startswith('/'):
                 handle_slash_command(agent, prompt[1:], mode, lang, config)
                 continue
-
             # Process regular prompt
             resolved_prompt = resolve_at_mentions(prompt)
-
             print("\n[Processing...]")
             result = agent.infer(resolved_prompt, mode=mode, lang=lang)
-
             if headless:
                 print(json.dumps(result, indent=2))
             else:
-                print("\n" + format_markdown(result))
+                # Fixed handling for dict result
+                if isinstance(result, dict):
+                    output = result.get('plan', '') + '\n\n' + result.get('output', '')
+                    print("\n" + format_markdown(output))
+                else:
+                    print("\n" + format_markdown(str(result)))  # Fallback
             print()
-
         except KeyboardInterrupt:
             print("\n[Interrupted. Type /quit to exit]")
             continue
