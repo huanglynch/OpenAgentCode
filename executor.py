@@ -64,19 +64,19 @@ class CodeExecutor(BaseExecutor):
                 return self.git_commit(action['message'])
             elif atype == 'bash':
                 return self.bash_exec(action['command'])
-            elif atype == 'compile_run':
+            elif atype == 'compile_run' or atype == 'run':  # 新增：支持'run'作为别名
                 return self.compile_run(action['file'], lang)
             elif atype == 'run_ut':
                 return self.run_ut(action['file'], lang)
             elif atype == 'tool':
                 tool = self.tool_loader.get_tool(action['name'])
                 return tool(**action.get('args', {}))
-            elif atype == 'create_pr': # 新
+            elif atype == 'create_pr':
                 return self.tool_loader.create_pr(
                     action['title'], action['body'], action.get('head', 'feature'),
                     action.get('base', 'main'), action.get('owner'), action.get('repo')
                 )
-            elif atype == 'review_pr': # 新
+            elif atype == 'review_pr':
                 return self.tool_loader.review_pr(
                     action['pr_number'], action['comment'], action.get('event', 'COMMENT'),
                     action.get('owner'), action.get('repo')
@@ -86,6 +86,7 @@ class CodeExecutor(BaseExecutor):
             return f'Missing required field in action: {e}'
         except Exception as e:
             return f'Action execution failed: {e}'
+
     def file_read(self, path):
         if not self.config['permissions']['file_read']:
             return 'Permission denied: file_read'
@@ -182,6 +183,7 @@ class CodeExecutor(BaseExecutor):
             return f'Compilation/execution timeout ({timeout}s)'
         except Exception as e:
             return f'Compilation/execution failed: {e}'
+
     def run_ut(self, file, lang):
         ut_commands = {
             'python': f'pytest {file} -v',
@@ -209,6 +211,7 @@ class CodeExecutor(BaseExecutor):
             return f'Unit test timeout ({timeout}s)'
         except Exception as e:
             return f'Unit test failed: {e}'
+
 class DocExecutor(BaseExecutor):
     def __init__(self, config):
         self.config = config
@@ -252,12 +255,13 @@ class DocExecutor(BaseExecutor):
             return f'Invalid regex pattern: {e}'
         except Exception as e:
             return f'Extract failed: {e}'
+
 def get_executor(mode, config=None):
     if not config:
         config = load_config()
-    if mode == 'code':
+    if mode == 'code' or mode == 'auto' or 'code' in mode:
         return CodeExecutor(config)
     elif mode == 'doc':
         return DocExecutor(config)
-    # For new tasks, extend Doc or Code
-    return CodeExecutor(config) if 'code' in mode else DocExecutor(config)
+    # For other tasks, default to CodeExecutor
+    return CodeExecutor(config)

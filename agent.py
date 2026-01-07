@@ -74,7 +74,8 @@ class Agent:
             lang=lang,
             context=yaml.dump(context) + "\n" + injected_rag
         )
-
+        # 新增：强制JSON输出格式，并提供动作示例
+        base += "\nAlways output in JSON format: {'plan': 'your plan', 'actions': [{'type': 'file_write', 'path': 'file.py', 'content': 'code'}, {'type': 'compile_run', 'file': 'file.py', 'lang': 'python'}]}"
         if 'debug' in task.lower() or 'error' in task.lower():
             base += "\n" + self.prompts.get('error_handle', '').format(error=task, lang=lang)
         elif 'ut' in task.lower() or 'test' in task.lower():
@@ -95,7 +96,6 @@ class Agent:
             base += "\n" + self.prompts.get('commit_push_pr', '').format(query=task, lang=lang)
         else:
             base += "\n" + self.prompts.get('code_plan', '').format(query=task, lang=lang)
-
         return base
 
     def optimize_prompt(self, original_prompt):
@@ -281,10 +281,8 @@ class Agent:
         """Enhanced output parsing with better error handling"""
         if not response or not response.strip():
             return {'plan': 'Empty LLM response', 'actions': []}
-
         if response.startswith("Error:"):
             return {'plan': response, 'actions': []}
-
         try:
             # 尝试直接解析JSON
             parsed = json.loads(response)
@@ -292,31 +290,25 @@ class Agent:
                 return parsed
         except json.JSONDecodeError:
             pass
-
         # JSON解析失败，尝试从文本中提取信息
         print("Debug: JSON parsing failed, trying text extraction")
-
         lines = response.split('\n')
         plan = ''
         actions = []
         in_actions = False
         current_action = {}
-
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-
             # 查找计划信息
             if line.lower().startswith('plan:') or '计划:' in line or '设计:' in line:
                 plan = line.split(':', 1)[1].strip() if ':' in line else line
                 continue
-
             # 查找动作信息
             if line.lower().startswith('actions:') or '动作:' in line:
                 in_actions = True
                 continue
-
             if in_actions and line.strip():
                 try:
                     # 尝试解析单行JSON
@@ -331,11 +323,9 @@ class Agent:
                             'content': line
                         }
                         actions.append(current_action)
-
         # 如果没有找到明确的计划，使用响应的前一部分作为计划
         if not plan:
             plan = response[:300] + "..." if len(response) > 300 else response
-
         # 如果没有找到动作，为设计任务创建默认的文件写入动作
         if not actions and (
                 '/design' in getattr(self, 'current_task', '') or 'design' in plan.lower() or '设计' in plan):
@@ -351,7 +341,20 @@ class Agent:
                 'path': 'output.md',
                 'content': response
             }]
-
+            # 新增：智能推断执行动作，如果响应包含代码且任务涉及运行
+            import re
+            if 'print(' in response and ('run' in self.current_task.lower() or '执行' in self.current_task.lower()):
+                code_match = re.search(r'```python\n(.*?)\n```', response, re.DOTALL)
+                if code_match:
+                    code = code_match.group(1).strip()
+                    temp_path = 'temp_exec.py'
+                    actions.insert(0, {'type': 'file_write', 'path': temp_path, 'content': code})
+                    actions.append({'type': 'compile_run', 'file': temp_path, 'lang': 'python'})
+        # 新增：如果响应提到'execute'或'run'，添加compile_run（假设文件已写）
+        if ('execute' in response.lower() or 'run' in response.lower()) and any(
+                a['type'] == 'file_write' for a in actions):
+            file_path = actions[0].get('path', 'output.py')  # 假设第一个write是代码文件
+            actions.append({'type': 'compile_run', 'file': file_path, 'lang': 'python'})
         return {'plan': plan, 'actions': actions}
 
     def detect_language(self, task):
