@@ -976,12 +976,14 @@ def interactive_mode(agent, mode, headless, lang, config):
 def interactive_chat(config):
     """Simple chat interface without tool execution"""
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print("  OpenAgentCode Chat Mode")
+    print(" OpenAgentCode Chat Mode")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("Chat Mode: Converse with AI directly.")
     print("Commands: /exit, /quit, /help, /config, /status, /model, /clear, /rag <query>")
+    print("For multimodal: Use format like 'Analyze this image: path/to/image.jpg'")
     print()
 
+    import base64
     from llm import LLMClient
 
     llm = LLMClient(config['llm'])
@@ -1009,13 +1011,13 @@ def interactive_chat(config):
 
                 elif cmd == 'help':
                     print("\n=== Chat Mode Commands ===")
-                    print("/exit, /quit     - Exit chat mode")
-                    print("/help            - Show this help message")
-                    print("/config          - Show current configuration")
-                    print("/status          - Show chat status")
-                    print("/model           - Show current model info")
-                    print("/clear           - Clear conversation history")
-                    print("/rag <query>     - Search RAG index (if enabled)")
+                    print("/exit, /quit - Exit chat mode")
+                    print("/help - Show this help message")
+                    print("/config - Show current configuration")
+                    print("/status - Show chat status")
+                    print("/model - Show current model info")
+                    print("/clear - Clear conversation history")
+                    print("/rag <query> - Search RAG index (if enabled)")
                     print("\nType your message to chat with AI.\n")
                     continue
 
@@ -1084,9 +1086,33 @@ def interactive_chat(config):
                     print("Type /help for available commands\n")
                     continue
 
-            # Regular chat message
-            conversation.append({"role": "user", "content": user_input})
+            # Detect multimodal input (e.g., "Analyze this image: path/to/image.jpg")
+            is_multimodal = ':' in user_input and any(ext in user_input.lower() for ext in ['.jpg', '.jpeg', '.png'])
+            content = user_input
 
+            if is_multimodal:
+                # Extract image path after ':'
+                parts = user_input.split(':', 1)
+                text_part = parts[0].strip()
+                image_path = parts[1].strip() if len(parts) > 1 else ''
+                if os.path.exists(image_path):
+                    with open(image_path, "rb") as image_file:
+                        base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+                    content = [
+                        {"type": "text", "text": text_part},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                    ]
+                    # Switch to vision model and endpoint
+                    original_model = llm.model
+                    original_endpoint = llm.endpoint
+                    llm.model = config['llm'].get('vision_model', llm.model)
+                    llm.endpoint = config['llm'].get('endpoint_vision', llm.endpoint)
+                else:
+                    print(f"Image file not found: {image_path}")
+                    continue
+
+            # Regular chat message
+            conversation.append({"role": "user", "content": content})
             messages = [{"role": "system", "content": system_msg}] + conversation
 
             print("\n[Thinking...]")
@@ -1095,6 +1121,11 @@ def interactive_chat(config):
             conversation.append({"role": "assistant", "content": response})
 
             print(f"\nAssistant: {response}\n")
+
+            # Restore original model and endpoint if switched
+            if is_multimodal:
+                llm.model = original_model
+                llm.endpoint = original_endpoint
 
         except KeyboardInterrupt:
             print("\n[Interrupted. Type /quit to exit]")
