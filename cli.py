@@ -1118,7 +1118,6 @@ def interactive_chat(config):
 def main(prompt, mode, headless, lang, chat, init):
     """
     OpenAgentCode - AI Coding Agent
-
     Examples:
         python cli.py --init
         python cli.py
@@ -1126,30 +1125,29 @@ def main(prompt, mode, headless, lang, chat, init):
         python cli.py --mode code "Write a function"
         python cli.py --chat
     """
-
     # Handle initialization
     if init:
         initialize_project()
         return
-
     # Load configuration
     original_cwd = os.getcwd()
     config_path = os.path.join(original_cwd, 'config.yaml')
-
     if not os.path.exists(config_path):
         print("No config.yaml found. Initializing project...")
         initialize_project()
         print("\nPlease set your API key and run again:")
-        print("  export OPENAI_API_KEY='your-key-here'")
-        print("  python cli.py")
+        print(" export OPENAI_API_KEY='your-key-here'")
+        print(" python cli.py")
         return
-
     # Load config and prompts
     config = load_config()
     load_config._original_cwd = config['_original_cwd']
     prompts = load_prompts()
-
-    # Create agent
+    # Handle chat mode (no agent needed)
+    if chat:
+        interactive_chat(config)
+        return
+    # Create agent (only for non-chat modes)
     try:
         context_manager = ContextManager(config)
         agent = Agent(config, prompts, context_manager)
@@ -1158,40 +1156,10 @@ def main(prompt, mode, headless, lang, chat, init):
         import traceback
         traceback.print_exc()
         return
-
-    # Handle chat mode
-    if chat:
-        interactive_chat(config)
-        return
-
     # Handle interactive mode (no prompt)
     if not prompt:
         interactive_mode(agent, mode, headless, lang, config)
         return
-
-    # Handle slash commands
-    if prompt.startswith('/'):
-        handle_slash_command(agent, prompt[1:], mode, lang, config)
-        return
-
-    # Handle single task
-    try:
-        resolved_prompt = resolve_at_mentions(prompt)
-
-        if not headless:
-            print("[Processing...]")
-
-        result = agent.infer(resolved_prompt, mode=mode, lang=lang)
-
-        if headless:
-            print(json.dumps(result, indent=2))
-        else:
-            print("\n" + format_markdown(result))
-
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
 
 
 if __name__ == '__main__':
