@@ -1023,7 +1023,6 @@ def interactive_chat(config):
 
                 elif cmd == 'config':
                     print("\n=== Current Configuration ===")
-                    # Don't show API key
                     safe_config = config.copy()
                     if 'llm' in safe_config and 'api_key' in safe_config['llm']:
                         api_key = safe_config['llm']['api_key']
@@ -1077,6 +1076,8 @@ def interactive_chat(config):
                             print()
                         else:
                             print(f"No results found for: {args}\n")
+                    except ImportError:
+                        print("RAG module not available. Please install required dependencies.\n")
                     except Exception as e:
                         print(f"RAG search failed: {e}\n")
                     continue
@@ -1086,18 +1087,18 @@ def interactive_chat(config):
                     print("Type /help for available commands\n")
                     continue
 
-            # Detect multimodal input (e.g., "Analyze this image: path/to/image1.jpg, path/to/image2.png")
+            # 统一使用 list 格式的 content，确保兼容性（文本 + 多模态都用 list）
             is_multimodal = ':' in user_input and any(ext in user_input.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif'])
-            content = user_input  # Default to str for text-only compatibility
+            content_list = [{"type": "text", "text": user_input}]  # 默认纯文本
 
             if is_multimodal:
-                # Extract text and image paths after ':'
+                # 提取文本和图片路径
                 parts = user_input.split(':', 1)
                 text_part = parts[0].strip()
                 image_paths_str = parts[1].strip() if len(parts) > 1 else ''
-                image_paths = [p.strip() for p in image_paths_str.split(',') if p.strip()][:2]  # Max 2 images
+                image_paths = [p.strip() for p in image_paths_str.split(',') if p.strip()][:2]  # 最多2张
 
-                content = [{"type": "text", "text": text_part}]
+                content_list = [{"type": "text", "text": text_part}]
                 valid_images = 0
                 for image_path in image_paths:
                     if valid_images >= 2:
@@ -1107,7 +1108,7 @@ def interactive_chat(config):
                         with open(image_path, "rb") as image_file:
                             base64_image = base64.b64encode(image_file.read()).decode('utf-8')
                         mime_type = f"image/{ext if ext != 'jpg' else 'jpeg'}"
-                        content.append({
+                        content_list.append({
                             "type": "image_url",
                             "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}
                         })
@@ -1116,16 +1117,20 @@ def interactive_chat(config):
                         print(f"Invalid or unsupported image: {image_path}")
 
                 if valid_images == 0:
-                    continue
+                    continue  # 无有效图片，继续普通对话
 
-                # Switch to vision model and endpoint
+                # 切换到视觉模型和 endpoint
                 original_model = llm.model
                 original_endpoint = llm.endpoint
                 llm.model = config['llm'].get('vision_model', llm.model)
                 llm.endpoint = config['llm'].get('endpoint_vision', llm.endpoint)
+            else:
+                # 普通文本时也用 list 格式，确保后续消息兼容
+                content_list = [{"type": "text", "text": user_input}]
 
-            # Regular chat message
-            conversation.append({"role": "user", "content": content})
+            # 添加到 conversation（content 始终为 list）
+            conversation.append({"role": "user", "content": content_list})
+
             messages = [{"role": "system", "content": system_msg}] + conversation
 
             print("\n[Thinking...]")
@@ -1135,7 +1140,7 @@ def interactive_chat(config):
 
             print(f"\nAssistant: {response}\n")
 
-            # Restore original model and endpoint if switched
+            # 如果是多模态，恢复原始模型和 endpoint
             if is_multimodal:
                 llm.model = original_model
                 llm.endpoint = original_endpoint
