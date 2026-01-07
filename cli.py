@@ -1088,7 +1088,7 @@ def interactive_chat(config):
 
             # Detect multimodal input (e.g., "Analyze this image: path/to/image1.jpg, path/to/image2.png")
             is_multimodal = ':' in user_input and any(ext in user_input.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif'])
-            content = [{"type": "text", "text": user_input}]  # Unified as list for compatibility
+            content = user_input  # Default to str for text-only compatibility
 
             if is_multimodal:
                 # Extract text and image paths after ':'
@@ -1150,6 +1150,7 @@ def interactive_chat(config):
             print(f"Error: {e}\n")
             import traceback
             traceback.print_exc()
+
 
 @click.command()
 @click.argument('prompt', required=False, default='')
