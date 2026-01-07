@@ -69,32 +69,32 @@ class Agent:
         }
 
     def build_prompt(self, task, mode, lang, context, injected_rag):
-        base = self.prompts['base_prompt'].format(
+        base = self.prompts.get('base_prompt', '').format(
             mode=mode,
             lang=lang,
             context=yaml.dump(context) + "\n" + injected_rag
         )
 
-        if 'debug' in task.lower():
-            base += "\n" + self.prompts['error_handle'].format(error=task, lang=lang)
-        elif 'ut' in task.lower():
-            base += "\n" + self.prompts['ut_expand'].format(query=task, lang=lang)
+        if 'debug' in task.lower() or 'error' in task.lower():
+            base += "\n" + self.prompts.get('error_handle', '').format(error=task, lang=lang)
+        elif 'ut' in task.lower() or 'test' in task.lower():
+            base += "\n" + self.prompts.get('ut_expand', '').format(query=task, lang=lang)
         elif mode == 'doc':
-            base += "\n" + self.prompts['doc_optimize'].format(content=task)
+            base += "\n" + self.prompts.get('doc_optimize', '').format(content=task)
         elif '/requirements' in task:
-            base += "\n" + self.prompts['requirements_gen'].format(query=task)
+            base += "\n" + self.prompts.get('requirements_gen', '').format(query=task)
         elif '/design' in task:
-            base += "\n" + self.prompts['design_gen'].format(query=task, lang=lang)
+            base += "\n" + self.prompts.get('design_gen', '').format(query=task, lang=lang)
         elif '/optimize' in task:
-            base += "\n" + self.prompts['optimize_task'].format(type=mode, query=task, lang=lang)
+            base += "\n" + self.prompts.get('optimize_task', '').format(type=mode, query=task, lang=lang)
         elif '/create-pr' in task:
-            base += "\n" + self.prompts['create_pr'].format(query=task)
+            base += "\n" + self.prompts.get('create_pr', '').format(query=task)
         elif '/review-pr' in task:
-            base += "\n" + self.prompts['review_pr'].format(query=task, lang=lang)
+            base += "\n" + self.prompts.get('review_pr', '').format(query=task, lang=lang)
         elif '/commit-push-pr' in task:
-            base += "\n" + self.prompts['commit_push_pr'].format(query=task, lang=lang)
+            base += "\n" + self.prompts.get('commit_push_pr', '').format(query=task, lang=lang)
         else:
-            base += "\n" + self.prompts['code_plan'].format(query=task, lang=lang)
+            base += "\n" + self.prompts.get('code_plan', '').format(query=task, lang=lang)
 
         return base
 

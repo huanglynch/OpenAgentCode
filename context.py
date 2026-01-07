@@ -7,18 +7,26 @@ DEFAULT_PROMPTS = {
 Compress to key points (< {token_limit} tokens): {content}
 """
 }
+
+
 class ContextManager:
     def __init__(self, config):
         self.config = config
-        self.context_file = self.config['paths']['context_file']
+        # 使用原始目录的 context 文件
+        original_cwd = config.get('_original_cwd', '.')
+        context_file = config['paths']['context_file']
+        self.context_file = os.path.join(original_cwd, context_file)
+
         self.encoding = tiktoken.encoding_for_model('gpt-3.5-turbo')
         self.max_tokens = self.config['llm']['max_tokens'] // 2
+
     def load(self):
         if not os.path.exists(self.context_file):
             return {'overview': '', 'history': [], 'facts': [], 'langs': []}
-        with open(self.context_file, 'r') as f:
+        with open(self.context_file, 'r', encoding='utf-8') as f:
             content = f.read()
         return yaml.safe_load(content) or {'overview': '', 'history': [], 'facts': [], 'langs': []}
+
     def update(self, new_data):
         current = self.load()
         if 'task' in new_data:
@@ -29,9 +37,12 @@ class ContextManager:
             current['facts'].append(new_data['results'])
         if len(current['history']) > 10:
             current['history'] = current['history'][-10:]
+
         compressed = self.compress(yaml.dump(current))
-        with open(self.context_file, 'w') as f:
+
+        with open(self.context_file, 'w', encoding='utf-8') as f:
             f.write(compressed)
+
     def compress(self, content):
         tokens = self.token_monitor(content)
         if tokens <= self.max_tokens:
@@ -58,8 +69,10 @@ class ContextManager:
         except:
             # 如果 LLM 调用失败，使用简单截断
             return content[:self.max_tokens * 4] # 粗略估计 token 比例
+
     def clear(self):
         with open(self.context_file, 'w') as f:
             yaml.dump({'overview': '', 'history': [], 'facts': [], 'langs': []}, f)
+
     def token_monitor(self, content):
         return len(self.encoding.encode(content))

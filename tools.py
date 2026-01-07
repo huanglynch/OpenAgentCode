@@ -3,29 +3,43 @@ import os
 import importlib.util
 import subprocess
 from git import Repo
+
+
 try:
     from github import Github
 except ImportError:
     Github = None
     print("Warning: PyGithub not installed. GitHub features disabled.")
+
+
 class ToolLoader:
     def __init__(self, tools_dir, config=None):
-        self.tools_dir = tools_dir
         self.config = config or {}
+
+        # 使用原始目录的 tools 目录
+        original_cwd = self.config.get('_original_cwd', '.')
+        if not os.path.isabs(tools_dir):
+            tools_dir = os.path.join(original_cwd, tools_dir)
+
+        self.tools_dir = tools_dir
+
         # 获取超时配置
         self.timeouts = self.config.get('timeouts', {
             'compile': 300,
             'unit_test': 300,
             'tool_execution': 300
         })
+
         self.tools = {}
         self.load_tools()
+
         self.github = None
         if self.config.get('permissions', {}).get('github_api', False) and self.config.get('github', {}).get('token'):
             if Github is None:
                 print("GitHub library not available.")
             else:
                 self.github = Github(self.config['github']['token'])
+
     def load_tools(self):
         # 确保目录存在
         if not os.path.exists(self.tools_dir):
@@ -57,8 +71,10 @@ class ToolLoader:
         self.tools['run_ut'] = self.run_ut
         self.tools['create_pr'] = self.create_pr # 新
         self.tools['review_pr'] = self.review_pr # 新
+
     def get_tool(self, name):
         return self.tools.get(name, lambda **kwargs: f'Tool not found: {name}')
+
     @staticmethod
     def git_clone(url, dest='.'):
         try:
@@ -66,6 +82,7 @@ class ToolLoader:
             return f'Successfully cloned {url} to {dest}'
         except Exception as e:
             return f'Failed to clone: {e}'
+
     @staticmethod
     def file_search(pattern):
         matches = []
@@ -77,6 +94,7 @@ class ToolLoader:
             return matches if matches else f'No files found matching: {pattern}'
         except Exception as e:
             return f'Search failed: {e}'
+
     def compile_lang(self, file, lang):
         """Compile source file based on language"""
         timeout = self.timeouts.get('compile', 300)
@@ -117,6 +135,7 @@ class ToolLoader:
             return f'Compiler not found for {lang}'
         except Exception as e:
             return f'Compilation error: {e}'
+
     def run_ut(self, file, lang):
         """Run unit tests based on language"""
         timeout = self.timeouts.get('unit_test', 300)
@@ -148,6 +167,7 @@ class ToolLoader:
             return f'Test runner not found for {lang}'
         except Exception as e:
             return f'Test execution error: {e}'
+
     def create_pr(self, title, body, head_branch, base_branch='main', owner=None, repo=None):
         if not self.config['permissions'].get('github_api', False):
             return 'Permission denied: github_api'
@@ -163,6 +183,7 @@ class ToolLoader:
             return f'PR created: {pr.html_url}'
         except Exception as e:
             return f'Create PR failed: {e}'
+
     def review_pr(self, pr_number, comment, event='COMMENT', owner=None, repo=None):
         if not self.config['permissions'].get('github_api', False):
             return 'Permission denied: github_api'

@@ -16,7 +16,6 @@ languages:
 workspace: ./workspace
 
 llm:
-  _original_api_key: $NVIDIA_API_KEY$
   api_key: $NVIDIA_API_KEY$
   api_key1: $XAI_API_KEY$
   endpoint: https://integrate.api.nvidia.com/v1/chat/completions
