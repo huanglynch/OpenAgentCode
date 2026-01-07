@@ -980,7 +980,7 @@ def interactive_chat(config):
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("Chat Mode: Converse with AI directly.")
     print("Commands: /exit, /quit, /help, /config, /status, /model, /clear, /rag <query>")
-    print("For multimodal: Use format like 'Analyze this image: path/to/image.jpg'")
+    print("For multimodal: Use format like 'Analyze this image: path/to/image1.jpg, path/to/image2.png'")
     print()
 
     import base64
@@ -1086,30 +1086,43 @@ def interactive_chat(config):
                     print("Type /help for available commands\n")
                     continue
 
-            # Detect multimodal input (e.g., "Analyze this image: path/to/image.jpg")
-            is_multimodal = ':' in user_input and any(ext in user_input.lower() for ext in ['.jpg', '.jpeg', '.png'])
-            content = user_input
+            # Detect multimodal input (e.g., "Analyze this image: path/to/image1.jpg, path/to/image2.png")
+            is_multimodal = ':' in user_input and any(ext in user_input.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif'])
+            content = [{"type": "text", "text": user_input}]  # Unified as list for compatibility
 
             if is_multimodal:
-                # Extract image path after ':'
+                # Extract text and image paths after ':'
                 parts = user_input.split(':', 1)
                 text_part = parts[0].strip()
-                image_path = parts[1].strip() if len(parts) > 1 else ''
-                if os.path.exists(image_path):
-                    with open(image_path, "rb") as image_file:
-                        base64_image = base64.b64encode(image_file.read()).decode('utf-8')
-                    content = [
-                        {"type": "text", "text": text_part},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                    ]
-                    # Switch to vision model and endpoint
-                    original_model = llm.model
-                    original_endpoint = llm.endpoint
-                    llm.model = config['llm'].get('vision_model', llm.model)
-                    llm.endpoint = config['llm'].get('endpoint_vision', llm.endpoint)
-                else:
-                    print(f"Image file not found: {image_path}")
+                image_paths_str = parts[1].strip() if len(parts) > 1 else ''
+                image_paths = [p.strip() for p in image_paths_str.split(',') if p.strip()][:2]  # Max 2 images
+
+                content = [{"type": "text", "text": text_part}]
+                valid_images = 0
+                for image_path in image_paths:
+                    if valid_images >= 2:
+                        break
+                    ext = os.path.splitext(image_path)[1].lower().lstrip('.')
+                    if ext in ['jpg', 'jpeg', 'png', 'gif'] and os.path.exists(image_path):
+                        with open(image_path, "rb") as image_file:
+                            base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+                        mime_type = f"image/{ext if ext != 'jpg' else 'jpeg'}"
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}
+                        })
+                        valid_images += 1
+                    else:
+                        print(f"Invalid or unsupported image: {image_path}")
+
+                if valid_images == 0:
                     continue
+
+                # Switch to vision model and endpoint
+                original_model = llm.model
+                original_endpoint = llm.endpoint
+                llm.model = config['llm'].get('vision_model', llm.model)
+                llm.endpoint = config['llm'].get('endpoint_vision', llm.endpoint)
 
             # Regular chat message
             conversation.append({"role": "user", "content": content})
