@@ -994,10 +994,42 @@ def interactive_chat(config):
 
     # 保存原始模型和端点配置
     original_model = config['llm']['model']
-    original_endpoint = config['llm']['base_url']
+    original_endpoint = config['llm'].get('endpoint') or config['llm'].get('base_url')
 
     # 添加一个标志来跟踪当前使用的模型类型
     using_vision_model = False
+
+    def clean_conversation_for_text_model(conv):
+        """清理对话历史，移除图片内容，仅保留文本"""
+        cleaned = []
+        for msg in conv:
+            cleaned_msg = {"role": msg["role"]}
+
+            # 处理 content
+            if isinstance(msg["content"], str):
+                # 已经是纯文本
+                cleaned_msg["content"] = msg["content"]
+            elif isinstance(msg["content"], list):
+                # 多模态内容，提取文本部分
+                text_parts = []
+                image_count = 0
+                for item in msg["content"]:
+                    if item.get("type") == "text":
+                        text_parts.append(item["text"])
+                    elif item.get("type") == "image_url":
+                        image_count += 1
+
+                # 组合文本，添加图片占位符
+                text = " ".join(text_parts)
+                if image_count > 0:
+                    text += f" [附带 {image_count} 张图片]"
+                cleaned_msg["content"] = text
+            else:
+                cleaned_msg["content"] = str(msg["content"])
+
+            cleaned.append(cleaned_msg)
+
+        return cleaned
 
     while True:
         try:
@@ -1030,7 +1062,6 @@ def interactive_chat(config):
 
                 elif cmd == 'config':
                     print("\n=== Current Configuration ===")
-                    # Don't show API key
                     safe_config = config.copy()
                     if 'llm' in safe_config and 'api_key' in safe_config['llm']:
                         api_key = safe_config['llm']['api_key']
@@ -1063,7 +1094,6 @@ def interactive_chat(config):
 
                 elif cmd == 'clear':
                     conversation.clear()
-                    # 清除对话时也恢复到原始模型
                     if using_vision_model:
                         llm.model = original_model
                         llm.endpoint = original_endpoint
@@ -1105,15 +1135,14 @@ def interactive_chat(config):
             # Detect multimodal input
             is_multimodal = ':' in user_input and any(
                 ext in user_input.lower() for ext in ['.jpg', '.jpeg', '.png', '.gif'])
-            content = user_input  # Default to str for text-only compatibility
+            content = user_input
 
             # 如果这次是多模态输入，切换到视觉模型
             if is_multimodal:
-                # Extract text and image paths after ':'
                 parts = user_input.split(':', 1)
                 text_part = parts[0].strip()
                 image_paths_str = parts[1].strip() if len(parts) > 1 else ''
-                image_paths = [p.strip() for p in image_paths_str.split(',') if p.strip()][:2]  # Max 2 images
+                image_paths = [p.strip() for p in image_paths_str.split(',') if p.strip()][:2]
 
                 content = [{"type": "text", "text": text_part}]
                 valid_images = 0
@@ -1149,9 +1178,17 @@ def interactive_chat(config):
                     llm.endpoint = original_endpoint
                     using_vision_model = False
 
-            # Regular chat message
+            # 添加用户消息到历史
             conversation.append({"role": "user", "content": content})
-            messages = [{"role": "system", "content": system_msg}] + conversation
+
+            # 根据当前模型类型准备消息
+            if using_vision_model:
+                # 视觉模型：使用原始对话（包含图片）
+                messages = [{"role": "system", "content": system_msg}] + conversation
+            else:
+                # 文本模型：清理对话中的图片
+                cleaned_conversation = clean_conversation_for_text_model(conversation)
+                messages = [{"role": "system", "content": system_msg}] + cleaned_conversation
 
             print("\n[Thinking...]")
             response = llm.chat(messages)
