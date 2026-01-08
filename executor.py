@@ -21,11 +21,9 @@ def load_config():
                 'tool_execution': 300
             }
         }
-
 class BaseExecutor:
     def execute(self, action, lang=None):
         raise NotImplementedError
-
 class CodeExecutor(BaseExecutor):
     def __init__(self, config):
         self.config = config
@@ -52,7 +50,6 @@ class CodeExecutor(BaseExecutor):
                 self.repo = None
         else:
             self.repo = None
-
     def execute(self, action, lang=None):
         atype = action.get('type', '')
         try:
@@ -63,9 +60,11 @@ class CodeExecutor(BaseExecutor):
             elif atype == 'git_commit':
                 return self.git_commit(action['message'])
             elif atype == 'bash':
-                return self.bash_exec(action['command'])
-            elif atype == 'compile_run' or atype == 'run':  # 新增：支持'run'作为别名
-                return self.compile_run(action['file'], lang)
+                # 修改: 用沙箱执行 bash
+                return self.sandbox_exec(self.bash_exec, action['command']) # 新增: 沙箱支持
+            elif atype == 'compile_run' or atype == 'run': # 新增：支持'run'作为别名
+                # 修改: 用沙箱执行 compile_run
+                return self.sandbox_exec(self.compile_run, action['file'], lang) # 新增: 沙箱支持
             elif atype == 'run_ut':
                 return self.run_ut(action['file'], lang)
             elif atype == 'tool':
@@ -86,7 +85,6 @@ class CodeExecutor(BaseExecutor):
             return f'Missing required field in action: {e}'
         except Exception as e:
             return f'Action execution failed: {e}'
-
     def file_read(self, path):
         if not self.config['permissions']['file_read']:
             return 'Permission denied: file_read'
@@ -128,7 +126,6 @@ class CodeExecutor(BaseExecutor):
             return f'Committed: {message}'
         except Exception as e:
             return f'Git commit failed: {e}'
-
     def bash_exec(self, command):
         if not self.config['permissions']['exec_bash'] and command not in self.allowed_bash:
             return 'Permission denied: bash command not allowed'
@@ -149,7 +146,6 @@ class CodeExecutor(BaseExecutor):
             return f'Command timeout ({self.timeouts.get("bash_exec", 300)}s)'
         except Exception as e:
             return f'Command execution failed: {e}'
-
     def compile_run(self, file, lang):
         commands = {
             'python': ['python', file],
@@ -183,7 +179,6 @@ class CodeExecutor(BaseExecutor):
             return f'Compilation/execution timeout ({timeout}s)'
         except Exception as e:
             return f'Compilation/execution failed: {e}'
-
     def run_ut(self, file, lang):
         ut_commands = {
             'python': f'pytest {file} -v',
@@ -211,7 +206,32 @@ class CodeExecutor(BaseExecutor):
             return f'Unit test timeout ({timeout}s)'
         except Exception as e:
             return f'Unit test failed: {e}'
-
+    # 新增: 简单沙箱执行 wrapper（使用 temp dir 隔离）
+    def sandbox_exec(self, func, *args, **kwargs):
+        """执行高风险函数在临时沙箱目录中"""
+        sandbox_dir = 'sandbox_temp'
+        try:
+            os.makedirs(sandbox_dir, exist_ok=True)
+            original_cwd = os.getcwd()
+            os.chdir(sandbox_dir)
+            # 复制必要文件（假设 args[0] 是 file，如果适用）
+            if len(args) > 0 and isinstance(args[0], str):
+                file_path = args[0]
+                source = os.path.join(original_cwd, file_path)
+                if os.path.exists(source):
+                    dest_path = os.path.join(sandbox_dir, file_path)
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    shutil.copy(source, dest_path)
+            result = func(*args, **kwargs)
+            return result
+        except Exception as e:
+            return f"Sandbox failed: {e}. Falling back to normal exec: {func(*args, **kwargs)}"
+        finally:
+            os.chdir(original_cwd)
+            try:
+                shutil.rmtree(sandbox_dir)
+            except:
+                print("Warning: Failed to clean sandbox")
 class DocExecutor(BaseExecutor):
     def __init__(self, config):
         self.config = config
@@ -255,7 +275,6 @@ class DocExecutor(BaseExecutor):
             return f'Invalid regex pattern: {e}'
         except Exception as e:
             return f'Extract failed: {e}'
-
 def get_executor(mode, config=None):
     if not config:
         config = load_config()

@@ -6,27 +6,31 @@ from context import ContextManager
 import multiprocessing
 import os
 import yaml
-import time  # 新增: 用于限流
-import datetime  # 新增: 用于时间戳文件名
-
-
+import time # 新增: 用于限流
+import datetime # 新增: 用于时间戳文件名
 class Agent:
-    def __init__(self, config, prompts, context_manager):
+    def __init__(self, config, prompts, context_manager, session_file=None): # 新增: session_file 参数
         self.config = config
         self.prompts = prompts
         self.context_manager = context_manager
         self.rag = VectorRAG(config)
-        self.last_call_time = 0  # 新增: 跟踪上次 LLM 调用时间，用于限流
-        self.qps = self.config['llm'].get('qps', 0.333)  # 新增: 从 config 获取 QPS，默认 0.333 (每3秒一次)
-
+        self.last_call_time = 0 # 新增: 跟踪上次 LLM 调用时间，用于限流
+        self.qps = self.config['llm'].get('qps', 0.333) # 新增: 从 config 获取 QPS，默认 0.333 (每3秒一次)
         # 新增: 从 config 读取优化参数
         self.max_output_display = self.config.get('optimization', {}).get('max_output_display', 120)
         self.max_iterations = self.config.get('optimization', {}).get('max_iterations', 0)
-
-    def infer(self, task, mode='code', lang=None, depth=0):  # Added depth param
-        if depth > 5:  # Prevent recursion depth issues
+        # 新增: ReAct 迭代限（从 config 获取，默认 3）
+        self.max_react_iterations = self.config.get('optimization', {}).get('max_react_iterations', 3) # 新增: ReAct 支持
+        self.session_file = session_file # 新增: 会话结果文件路径
+        # 新增: 日志记录（量化指标）
+        self.metrics_log = os.path.join('logs', 'oac_metrics.json') # 新增: 评估指标
+        os.makedirs('logs', exist_ok=True)
+        self.metrics = [] # 临时存储指标
+    def infer(self, task, mode='code', lang=None, depth=0): # Added depth param
+        if depth > 5: # Prevent recursion depth issues
             return {'plan': 'Max recursion depth reached', 'output': 'Aborted sub-tasks'}
-        self.current_depth = depth  # Track recursion (new line)
+        self.current_depth = depth # Track recursion (new line)
+        self.current_task = task # 新增: 记录当前任务用于文件日志
         if not lang:
             lang = self.detect_language(task)
         context = self.context_manager.load()
@@ -37,83 +41,208 @@ class Agent:
             context = self.context_manager.compress(yaml.dump(context))
         rag_results = self.rag.search(task, self.config['rag']['top_k'], mode, lang)
         injected_rag = self.inject_rag_results(rag_results)
-        prompt = self.build_prompt(task, mode, lang, context, injected_rag)
-        # 自动优化 prompt，如果是 debug 相关
-        if 'debug' in task.lower() or 'error' in task.lower():
-            print("Debug: Optimizing prompt for debug task")
-            prompt = self.optimize_prompt(prompt)
-        print(f"Debug: Calling LLM with prompt length: {len(prompt)}")
-        response = self.call_llm(prompt)
-        if not response or response.startswith("Error:"):
-            return {'plan': 'LLM call failed', 'output': response}
-        parsed = self.parse_output(response)
-        from executor import get_executor
-        executor = get_executor(mode, self.config)
-        results = []
-        for action in parsed.get('actions', []):
-            try:
-                result = executor.execute(action, lang=lang)
-                results.append(result)
-            except Exception as e:
-                results.append(f"Action execution failed: {e}")
-        output_str = '\n'.join(results)
-
-        # 新增: 保存执行结果到文件
-        self.save_result_to_file(output_str)
-
-        # 新增: 打印执行结果到屏幕（前 max_output_display 字）
-        display_output = output_str[:self.max_output_display] + '...' if len(
-            output_str) > self.max_output_display else output_str
-        print(f"Agent Output (truncated to {self.max_output_display} chars): {display_output}")
-
-        update_data = {
-            'task': task,
-            'plan': parsed.get('plan', ''),
-            'results': output_str  # 修改: 保存完整结果
-        }
-        self.context_manager.update(update_data)
-
-        # 新增: 迭代优化逻辑（如果 max_iterations > 0）
-        iteration_count = 0
-        while self.max_iterations > 0 and iteration_count < self.max_iterations:
-            if self.check_result(output_str):  # 如果结果正常，退出迭代
-                break
-            print(f"Iteration {iteration_count + 1}: Result check failed, optimizing...")
-            # 使用 debug mode 进行迭代优化，传入当前 output 作为 error
-            optimized_task = f"Debug and fix error in previous output: {output_str[:500]}"  # 限制长度避免 token 爆炸
-            optimized_result = self.infer(optimized_task, mode='debug', lang=lang, depth=depth + 1)
-            output_str = optimized_result.get('output', output_str)  # 更新 output
-            # 保存新结果
+        # 新增: 检查任务复杂度，如果简单，直接使用单次推理路径
+        if mode in ['auto', 'debug']:
+            if 'simple' in task.lower() or len(task) < 50: # 简单任务条件
+                # 复制原有单次推理逻辑（避免ReAct循环）
+                prompt = self.build_prompt(task, mode, lang, context, injected_rag)
+                if 'debug' in task.lower() or 'error' in task.lower():
+                    print("Debug: Optimizing prompt for debug task")
+                    prompt = self.optimize_prompt(prompt)
+                print(f"Debug: Calling LLM with prompt length: {len(prompt)}")
+                response = self.call_llm(prompt)
+                if not response or response.startswith("Error:"):
+                    return {'plan': 'LLM call failed', 'output': response}
+                parsed = self.parse_output(response)
+                from executor import get_executor
+                executor = get_executor(mode, self.config)
+                results = []
+                for action in parsed.get('actions', []):
+                    try:
+                        result = executor.execute(action, lang=lang)
+                        results.append(result)
+                    except Exception as e:
+                        results.append(f"Action execution failed: {e}")
+                output_str = '\n'.join(results)
+                self.save_result_to_file(output_str)
+                display_output = output_str[:self.max_output_display] + '...' if len(
+                    output_str) > self.max_output_display else output_str
+                if self.current_depth == 0: # 只在主任务打印到屏幕
+                    print(f"Agent Output (truncated to {self.max_output_display} chars): {display_output}")
+                update_data = {
+                    'task': task,
+                    'plan': parsed.get('plan', ''),
+                    'results': output_str
+                }
+                self.context_manager.update(update_data)
+                # 迭代优化逻辑（受max_iterations控制）
+                iteration_count = 0
+                while self.max_iterations > 0 and iteration_count < self.max_iterations:
+                    if self.check_result(output_str):
+                        break
+                    print(f"Iteration {iteration_count + 1}: Result check failed, optimizing...")
+                    optimized_task = f"Debug and fix error in previous output: {output_str[:500]}"
+                    optimized_result = self.infer(optimized_task, mode='debug', lang=lang, depth=depth + 1)
+                    output_str = optimized_result.get('output', output_str)
+                    self.save_result_to_file(output_str)
+                    display_output = output_str[:self.max_output_display] + '...' if len(
+                        output_str) > self.max_output_display else output_str
+                    if self.current_depth == 0: # 只在主任务打印到屏幕
+                        print(f"Optimized Output (truncated): {display_output}")
+                    update_data['results'] = output_str
+                    self.context_manager.update(update_data)
+                    iteration_count += 1
+                result = {
+                    'plan': parsed.get('plan', ''),
+                    'output': output_str
+                }
+            else:
+                result = self.react_loop(task, mode, lang, context, injected_rag, depth)
+        else:
+            # 原有单次推理逻辑（保持不变）
+            prompt = self.build_prompt(task, mode, lang, context, injected_rag)
+            if 'debug' in task.lower() or 'error' in task.lower():
+                print("Debug: Optimizing prompt for debug task")
+                prompt = self.optimize_prompt(prompt)
+            print(f"Debug: Calling LLM with prompt length: {len(prompt)}")
+            response = self.call_llm(prompt)
+            if not response or response.startswith("Error:"):
+                return {'plan': 'LLM call failed', 'output': response}
+            parsed = self.parse_output(response)
+            from executor import get_executor
+            executor = get_executor(mode, self.config)
+            results = []
+            for action in parsed.get('actions', []):
+                try:
+                    result = executor.execute(action, lang=lang)
+                    results.append(result)
+                except Exception as e:
+                    results.append(f"Action execution failed: {e}")
+            output_str = '\n'.join(results)
             self.save_result_to_file(output_str)
             display_output = output_str[:self.max_output_display] + '...' if len(
                 output_str) > self.max_output_display else output_str
-            print(f"Optimized Output (truncated): {display_output}")
-            # 更新上下文
-            update_data['results'] = output_str
+            if self.current_depth == 0: # 只在主任务打印到屏幕
+                print(f"Agent Output (truncated to {self.max_output_display} chars): {display_output}")
+            update_data = {
+                'task': task,
+                'plan': parsed.get('plan', ''),
+                'results': output_str
+            }
             self.context_manager.update(update_data)
-            iteration_count += 1
-
-        return {
-            'plan': parsed.get('plan', ''),
-            'output': output_str
+            iteration_count = 0
+            while self.max_iterations > 0 and iteration_count < self.max_iterations:
+                if self.check_result(output_str):
+                    break
+                print(f"Iteration {iteration_count + 1}: Result check failed, optimizing...")
+                optimized_task = f"Debug and fix error in previous output: {output_str[:500]}"
+                optimized_result = self.infer(optimized_task, mode='debug', lang=lang, depth=depth + 1)
+                output_str = optimized_result.get('output', output_str)
+                self.save_result_to_file(output_str)
+                display_output = output_str[:self.max_output_display] + '...' if len(
+                    output_str) > self.max_output_display else output_str
+                if self.current_depth == 0: # 只在主任务打印到屏幕
+                    print(f"Optimized Output (truncated): {display_output}")
+                update_data['results'] = output_str
+                self.context_manager.update(update_data)
+                iteration_count += 1
+            result = {
+                'plan': parsed.get('plan', ''),
+                'output': output_str
+            }
+        # 新增: 记录指标并保存日志
+        success = self.check_result(result['output'])
+        metrics_entry = {
+            'task': task,
+            'mode': mode,
+            'iterations': iteration_count if 'iteration_count' in locals() else 0,
+            'success': success,
+            'depth': depth
         }
-
+        self.metrics.append(metrics_entry)
+        self.save_metrics()
+        return result
+    # 新增: ReAct 循环方法
+    def react_loop(self, task, mode, lang, context, injected_rag, depth):
+        """ReAct 框架：Reason + Act + Observe 循环，直到任务完成"""
+        observations = [] # 存储观察结果
+        react_iteration = 0
+        output_str = ''
+        plan = ''
+        while react_iteration < self.max_react_iterations:
+            # 构建 ReAct 提示：注入先前观察
+            react_prompt = self.build_prompt(task, mode, lang, context, injected_rag)
+            react_prompt += "\nReAct: Think step-by-step, then output actions. If task complete, set 'done': true in JSON."
+            if observations:
+                react_prompt += f"\nPrevious observations: {yaml.dump(observations[-3:])}" # 仅最后3个观察，避免 token 爆炸
+            response = self.call_llm(react_prompt)
+            if not response or response.startswith("Error:"):
+                return {'plan': 'LLM call failed', 'output': response}
+            parsed = self.parse_output(response)
+            # 执行 actions
+            from executor import get_executor
+            executor = get_executor(mode, self.config)
+            results = []
+            for action in parsed.get('actions', []):
+                try:
+                    result = executor.execute(action, lang=lang)
+                    results.append(result)
+                except Exception as e:
+                    results.append(f"Action failed: {e}")
+            observation = '\n'.join(results)
+            observations.append(observation)
+            output_str += observation + '\n'
+            plan = parsed.get('plan', plan) # 更新 plan
+            # 检查是否完成（LLM 输出 'done': true）
+            if parsed.get('done', False):
+                break
+            react_iteration += 1
+        # 保存和更新（如原有逻辑）
+        self.save_result_to_file(output_str)
+        display_output = output_str[:self.max_output_display] + '...' if len(output_str) > self.max_output_display else output_str
+        if self.current_depth == 0: # 只在主任务打印到屏幕
+            print(f"ReAct Output (truncated): {display_output}")
+        update_data = {'task': task, 'plan': plan, 'results': output_str}
+        self.context_manager.update(update_data)
+        return {'plan': plan, 'output': output_str}
     # 新增: 检查结果是否明显错误的方法（简单关键词检查，可扩展）
     def check_result(self, output_str):
         error_keywords = ["error:", "failed:", "exception:", "aborted", "permission denied"]
         return not any(keyword.lower() in output_str.lower() for keyword in error_keywords)
-
-    # 新增: 保存结果到文件的方法
+    # 新增: 保存结果到文件的方法（修改为追加到 session_file，如果存在）
     def save_result_to_file(self, output_str):
         result_dir = './result'
         os.makedirs(result_dir, exist_ok=True)
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"OAC_RESULT_{timestamp}.txt"
-        filepath = os.path.join(result_dir, filename)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(output_str)
-        print(f"Result saved to: {filepath}")
-
+        if self.session_file:
+            # 如果有 session_file，追加写入
+            header = f"--- Sub-task: {self.current_task} (depth {self.current_depth}) ---" if self.current_depth > 0 else f"--- New Result: {self.current_task} ---"
+            with open(self.session_file, 'a', encoding='utf-8') as f:
+                f.write(f"\n{header}\n{output_str}\n")
+            if self.current_depth == 0: # 只在主任务打印保存信息
+                print(f"Result appended to session file: {self.session_file}")
+        else:
+            # 否则，使用原有逻辑
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"OAC_RESULT_{timestamp}.txt"
+            filepath = os.path.join(result_dir, filename)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(output_str)
+            print(f"Result saved to: {filepath}")
+    # 新增: 保存指标日志
+    def save_metrics(self):
+        """追加指标到 JSON 文件"""
+        try:
+            existing = []
+            if os.path.exists(self.metrics_log):
+                with open(self.metrics_log, 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
+            existing.extend(self.metrics)
+            with open(self.metrics_log, 'w', encoding='utf-8') as f:
+                json.dump(existing, f, indent=2)
+            self.metrics = [] # 清空临时存储
+            print(f"Metrics logged to {self.metrics_log}")
+        except Exception as e:
+            print(f"Metrics logging failed: {e}") # 新增: 评估指标
     def build_prompt(self, task, mode, lang, context, injected_rag):
         base = self.prompts.get('base_prompt', '').format(
             mode=mode,
@@ -146,7 +275,6 @@ class Agent:
         if mode == 'auto':
             base += "\n" + self.prompts.get('decompose_task', '').format(query=task)
         return base
-
     def optimize_prompt(self, original_prompt):
         """Use LLM to optimize the prompt for better effectiveness."""
         if 'optimize_prompt' not in self.prompts:
@@ -159,7 +287,6 @@ class Agent:
             return improved
         else:
             return original_prompt
-
     def inject_rag_results(self, paths):
         injected = []
         for path in paths:
@@ -197,7 +324,6 @@ class Agent:
                 print(f"Warning: Failed to inject {path}: {e}")
                 continue
         return '\n'.join(injected)
-
     def call_llm(self, prompt):
         """Enhanced LLM call with NVIDIA thinking model support and retry logic"""
         import time
@@ -218,7 +344,7 @@ class Agent:
         # 对于思维模型，使用更大的 max_tokens
         max_tokens = self.config['llm']['max_tokens']
         if 'thinking' in self.config['llm']['model'].lower():
-            max_tokens = min(32768, max_tokens * 2)  # 思维模型需要更多tokens
+            max_tokens = min(32768, max_tokens * 2) # 思维模型需要更多tokens
         payload = {
             'model': self.config['llm']['model'],
             'messages': [{'role': 'user', 'content': prompt}],
@@ -304,7 +430,6 @@ class Agent:
                 else:
                     return f"Error: Unexpected error after {max_retries} attempts: {e}"
         return "Error: Failed to get response after all retry attempts"
-
     def parse_output(self, response):
         """Enhanced output parsing with better error handling"""
         if not response or not response.strip():
@@ -318,14 +443,14 @@ class Agent:
                 # New: Handle sub_tasks if present
                 sub_tasks = parsed.get('sub_tasks', [])
                 if sub_tasks:
-                    sub_results = []
-                    for sub_task in sub_tasks:  # Sequential execution
-                        sub_result = self.infer(sub_task, mode='auto', lang=self.detect_language(sub_task),
-                                                depth=self.current_depth + 1)  # Recursive call
-                        sub_results.append(sub_result.get('output', ''))
+                    sub_results = [self.infer(t, mode='auto', lang=self.detect_language(t), depth=self.current_depth + 1) for t in sub_tasks] # 顺序执行子任务
+                    # 合并结果（按顺序）
+                    sub_outputs = [r.get('output', '') for r in sub_results]
                     # 直接附加到plan作为描述（不作为action）
                     parsed[
-                        'plan'] += f"\nSub-tasks executed: {len(sub_tasks)}\nSub-results:\n{' '.join(sub_results)}"  # <-- 改这里
+                        'plan'] += f"\nSub-tasks executed: {len(sub_tasks)}\nSub-results:\n{' '.join(sub_outputs)}" # <-- 改这里
+                # 新增: 检查 ReAct 'done' 字段
+                parsed['done'] = parsed.get('done', False)
                 return parsed
         except json.JSONDecodeError:
             pass
@@ -392,10 +517,9 @@ class Agent:
         # 新增：如果响应提到'execute'或'run'，添加compile_run（假设文件已写）
         if ('execute' in response.lower() or 'run' in response.lower()) and any(
                 a['type'] == 'file_write' for a in actions):
-            file_path = actions[0].get('path', 'output.py')  # 假设第一个write是代码文件
+            file_path = actions[0].get('path', 'output.py') # 假设第一个write是代码文件
             actions.append({'type': 'compile_run', 'file': file_path, 'lang': 'python'})
         return {'plan': plan, 'actions': actions}
-
     def detect_language(self, task):
         """Enhanced language detection"""
         exts = {
@@ -430,8 +554,3 @@ class Agent:
             if any(word in task_lower for word in words):
                 return lang
         return self.config['languages']['default']
-
-    def run_sub_agents(self, sub_tasks, mode, lang):
-        """Run multiple sub-agents in parallel"""
-        with multiprocessing.Pool(processes=min(len(sub_tasks), 4)) as pool:
-            return pool.starmap(self.infer, [(t, mode, lang) for t in sub_tasks])

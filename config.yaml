@@ -17,7 +17,7 @@ llm:
   _original_api_key: $NVIDIA_API_KEY$
   api_key: $NVIDIA_API_KEY$
   api_key1: $XAI_API_KEY$
-  endpoint: http://localhost:11434/v1/chat/completions
+  endpoint: https://integrate.api.nvidia.com/v1/chat/completions
   endpoint_nvidia: https://integrate.api.nvidia.com/v1/chat/completions
   endpoint_ollama: http://localhost:11434/v1/chat/completions
   endpoint_vision: http://localhost:8000/api/chat/completions
@@ -26,11 +26,10 @@ llm:
   max_tokens: 32768
   model: qwen/qwen3-coder-480b-a35b-instruct
   temperature: 0.6
-  vision_model: qwen/qwen3-235b-a22b-instruct
-  qps: 0.2 # 新增: QPS限率，默认每5秒一次请求（1/5=0.2）。可调整为更高值如1.0（每秒1次）
+  vision_model: vl-model
+  qps: 0.2
 models:
-- vllm,qwen/qwen3-235b-a22b-instruct
-- vllm,qwen/qwen3-235b-a22b-instruct
+- vllm,model
 - ollama,qwen3:1.7b
 - xai,grok-4-1-fast-non-reasoning
 - nvidia,qwen/qwen3-next-80b-a3b-thinking
@@ -85,7 +84,6 @@ timeouts:
   tool_execution: 600
   unit_test: 600
 
-# 新增: 优化参数部分
 optimization:
-  max_output_display: 120  # 输出到屏幕的最大字符数，默认120
-  max_iterations: 0  # 最大迭代优化次数，默认0（不迭代）
+  max_output_display: 120 
+  max_iterations: 0 
