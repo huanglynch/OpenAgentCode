@@ -206,32 +206,51 @@ class CodeExecutor(BaseExecutor):
             return f'Unit test timeout ({timeout}s)'
         except Exception as e:
             return f'Unit test failed: {e}'
-    # 新增: 简单沙箱执行 wrapper（使用 temp dir 隔离）
+
     def sandbox_exec(self, func, *args, **kwargs):
         """执行高风险函数在临时沙箱目录中"""
         sandbox_dir = 'sandbox_temp'
+        original_cwd = os.getcwd()
+
         try:
-            os.makedirs(sandbox_dir, exist_ok=True)
-            original_cwd = os.getcwd()
-            os.chdir(sandbox_dir)
-            # 复制必要文件（假设 args[0] 是 file，如果适用）
+            # 使用绝对路径创建沙箱目录
+            sandbox_abs = os.path.join(original_cwd, sandbox_dir)
+            os.makedirs(sandbox_abs, exist_ok=True)
+
+            # 复制文件到沙箱（在 chdir 之前）
             if len(args) > 0 and isinstance(args[0], str):
                 file_path = args[0]
                 source = os.path.join(original_cwd, file_path)
                 if os.path.exists(source):
-                    dest_path = os.path.join(sandbox_dir, file_path)
-                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    # 目标路径：沙箱目录内，保持相同的相对路径结构
+                    dest_path = os.path.join(sandbox_abs, os.path.basename(file_path))
+                    dest_dir = os.path.dirname(dest_path)
+                    if dest_dir:
+                        os.makedirs(dest_dir, exist_ok=True)
                     shutil.copy(source, dest_path)
-            result = func(*args, **kwargs)
+
+            # 切换到沙箱目录
+            os.chdir(sandbox_abs)
+
+            # 修改 args 中的文件路径为相对于沙箱的路径
+            new_args = list(args)
+            if len(new_args) > 0 and isinstance(new_args[0], str):
+                new_args[0] = os.path.basename(new_args[0])
+
+            result = func(*new_args, **kwargs)
             return result
+
         except Exception as e:
-            return f"Sandbox failed: {e}. Falling back to normal exec: {func(*args, **kwargs)}"
+            return f"Sandbox execution failed: {e}"
+
         finally:
+            # 确保恢复原始目录
             os.chdir(original_cwd)
             try:
-                shutil.rmtree(sandbox_dir)
-            except:
+                shutil.rmtree(os.path.join(original_cwd, sandbox_dir))
+            except Exception:
                 print("Warning: Failed to clean sandbox")
+                
 class DocExecutor(BaseExecutor):
     def __init__(self, config):
         self.config = config
