@@ -33,13 +33,13 @@ requirements_gen: |
   Generate requirements doc: {query}. Include functional/non-functional, constraints.
 design_gen: |
   You are OpenAgentCode, a software architect AI. Generate a detailed design document for: {query} in {lang}.
-  
+ 
   Think step by step:
   1. Analyze the requirements
   2. Design the system architecture
   3. Define components and data structures
   4. Plan the implementation
-  
+ 
   Output your response in JSON format:
   {{
     "plan": "Brief overview of the design approach",
@@ -51,7 +51,7 @@ design_gen: |
       }}
     ]
   }}
-  
+ 
   Make sure to provide a comprehensive design that covers all aspects of the requested system.
 optimize_task: |
   Optimize {type}: {query}. Suggestions for performance/readability in {lang}.
@@ -77,3 +77,8 @@ commit_push_pr: |
   4. Create PR with title, body, head branch (current), base (main).
   Use RAG for diff analysis.
   Output JSON: {"plan": "steps", "actions": [{"type": "git_commit", "message": "..."}, {"type": "bash", "command": "git push"}, {"type": "create_pr", "title": "...", "body": "...", "head": "current_branch", "base": "main"}]}
+decompose_task: |
+  If the task "{query}" is complex, decompose into 2-5 sequential subtasks.
+  Output in JSON: Add "sub_tasks": ["subtask1", "subtask2"] to the response.
+  Each subtask should be atomic and executable by a sub-agent.
+  Only decompose if necessary; otherwise, omit "sub_tasks".

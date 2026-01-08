@@ -12,28 +12,29 @@ languages:
   - java
   - cs
   - go
-
 workspace: ./workspace
-
 llm:
+  _original_api_key: $NVIDIA_API_KEY$
   api_key: $NVIDIA_API_KEY$
   api_key1: $XAI_API_KEY$
-  endpoint: https://integrate.api.nvidia.com/v1/chat/completions
+  endpoint: http://localhost:11434/v1/chat/completions
   endpoint_nvidia: https://integrate.api.nvidia.com/v1/chat/completions
   endpoint_ollama: http://localhost:11434/v1/chat/completions
-  endpoint_vision: http://localhost:11434/api/chat/completions
-  endpoint_vllm: http://localhost:11434/api/chat/completions
+  endpoint_vision: http://localhost:8000/api/chat/completions
+  endpoint_vllm: http://localhost:8000/api/chat/completions
   endpoint_xai: http://localhost:8000/api/chat/completions
   max_tokens: 32768
-  model: qwen/qwen3-next-80b-a3b-thinking
+  model: qwen/qwen3-coder-480b-a35b-instruct
   temperature: 0.6
-  vision_model: AI:MM
+  vision_model: qwen/qwen3-235b-a22b-instruct
+  qps: 0.2 # 新增: QPS限率，默认每5秒一次请求（1/5=0.2）。可调整为更高值如1.0（每秒1次）
 models:
-- vllm,AI:Pro
-- vllm,AI:MM
+- vllm,qwen/qwen3-235b-a22b-instruct
+- vllm,qwen/qwen3-235b-a22b-instruct
 - ollama,qwen3:1.7b
 - xai,grok-4-1-fast-non-reasoning
 - nvidia,qwen/qwen3-next-80b-a3b-thinking
+- nvidia,qwen/qwen3-coder-480b-a35b-instruct
 modes:
   default: code
 paths:
@@ -49,13 +50,18 @@ permissions:
   file_write: true
   git_commit: false
   github_api: false
+  allow_write: true
+  allow_execute: true
+  allow_network: false
 rag:
   chunk_size: 384
+  chunk_overlap: 200
   embedding_model: all-mpnet-base-v2
   hybrid_alpha: 0.4
   index_refresh_interval: 300
   rerank_enabled: true
   top_k: 8
+  enabled: true
 tasks_optimizations:
   debug:
     chunk_method: function
@@ -78,3 +84,8 @@ timeouts:
   llm_request: 600
   tool_execution: 600
   unit_test: 600
+
+# 新增: 优化参数部分
+optimization:
+  max_output_display: 120  # 输出到屏幕的最大字符数，默认120
+  max_iterations: 0  # 最大迭代优化次数，默认0（不迭代）
