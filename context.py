@@ -18,16 +18,18 @@ class ContextManager:
         self.context_file = os.path.join(original_cwd, context_file)
         self.encoding = tiktoken.encoding_for_model('gpt-3.5-turbo')
         self.max_tokens = self.config['llm']['max_tokens'] // 2
+
     def load(self):
         if not os.path.exists(self.context_file):
             return {'overview': '', 'history': [], 'facts': [], 'langs': []}
-        with open(self.context_file, 'r', encoding='utf-8') as f:
+        with open(self.context_file, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
         try:
             return yaml.safe_load(content) or {'overview': '', 'history': [], 'facts': [], 'langs': []}
         except yaml.YAMLError as e:
             print(f"YAML load error: {e}. Falling back to default context.")
             return {'overview': '', 'history': [], 'facts': [], 'langs': []}
+
     def update(self, new_data):
         current = self.load()
         if 'task' in new_data:

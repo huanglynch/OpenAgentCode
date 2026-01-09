@@ -1,5 +1,6 @@
 # rag_vector.py - 完整的向量RAG实现
 import os
+#os.environ['HF_HUB_OFFLINE'] = '1'  # 启用离线模式,转由配置文件控制
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import CountVectorizer
@@ -23,6 +24,7 @@ try:
     WATCHDOG_AVAILABLE = True
 except ImportError:
     print("Warning: watchdog not available. Auto-refresh disabled.")
+
 # 新增: FAISS 可选导入（用于向量搜索加速）
 FAISS_AVAILABLE = False
 try:
@@ -30,27 +32,32 @@ try:
     FAISS_AVAILABLE = True
 except ImportError:
     print("Warning: faiss not available. Using full scan for vector search.")
+
+
 class VectorRAG:
     def __init__(self, config):
         self.config = config
-        # 初始化基础属性
+        # 初始化基础属性 (不变)
         self.vectorizer = CountVectorizer()
         self.alpha = self.config['rag'].get('hybrid_alpha', 0.4)
+        if self.config['rag'].get('offline_mode', False):
+            os.environ['HF_HUB_OFFLINE'] = '1'
+            print("✓ HF_HUB_OFFLINE enabled via config")
         self.index = {}
         self.contents = []
         self.paths = []
-        # 新增: FAISS 索引（None 如果不可用）
-        self.faiss_index = None if not FAISS_AVAILABLE else None  # 新增: FAISS 支持
-        # 获取并规范化缓存目录路径
+        self.faiss_index = None if not FAISS_AVAILABLE else None
+        # 获取并规范化缓存目录路径 (不变)
         cache_dir = self._get_cache_dir()
-        # 加载或下载模型
+        # 加载模型（修改：使用try-except处理下载）
         self.model = self._load_model(cache_dir)
-        # 构建索引
+        # 构建索引 (不变)
         self.build_index()
-        # 设置文件监控
+        # 设置文件监控 (不变)
         refresh_interval = self.config['rag'].get('index_refresh_interval', 0)
         if WATCHDOG_AVAILABLE and refresh_interval > 0:
             self.setup_watcher()
+
     def _get_cache_dir(self):
         """获取并规范化缓存目录的绝对路径"""
         cache_dir = os.path.expanduser(self.config['paths']['embed_cache_dir'])
@@ -62,64 +69,41 @@ class VectorRAG:
         # 确保目录存在
         os.makedirs(cache_dir, exist_ok=True)
         return cache_dir
+
     def _load_model(self, cache_dir):
-        """加载嵌入模型,优先使用本地缓存,失败则自动下载"""
+        """加载嵌入模型: 优先本地缓存; 如果失败, 尝试下载; 下载失败则报错优雅退出。"""
         model_name = self.config['rag']['embedding_model']
-        # 尝试从本地缓存加载
+        print(f"Attempting to load model '{model_name}' (cache: {cache_dir})")
         try:
-            print(f"Attempting to load model '{model_name}' from cache: {cache_dir}")
+            # 先尝试仅用本地缓存加载（优先本地）
             model = SentenceTransformer(
                 model_name,
                 cache_folder=cache_dir,
-                local_files_only=True
+                local_files_only=True  # 强制仅本地
             )
-            print(f"✓ Successfully loaded model from cache")
+            print(f"✓ Loaded from local cache")
             return model
-        except Exception as e:
-            print(f"Failed to load from cache: {e}")
-            # 检查是否强制离线模式
-            if os.environ.get('HF_HUB_OFFLINE') == '1':
-                print("\n" + "=" * 60)
-                print("Model not found in cache and offline mode is enabled.")
-                print(f"Cache directory: {cache_dir}")
-                print(f"Model name: {model_name}")
-                print("\nOptions:")
-                print("1. Download the model first (unset HF_HUB_OFFLINE)")
-                print("2. Copy model files to the cache directory")
-                print("3. Disable RAG in config.yaml (set enabled: false)")
-                print("=" * 60 + "\n")
-                raise RuntimeError(f"Model '{model_name}' not available offline")
-            # 尝试下载
-            return self._download_model(model_name, cache_dir)
-    def _download_model(self, model_name, cache_dir):
-        """下载嵌入模型到指定目录"""
-        print(f"\nDownloading model '{model_name}'...")
-        print(f"Target directory: {cache_dir}")
-        print(f"This may take a few minutes depending on your connection...")
-        try:
-            # 临时允许网络访问
-            original_offline = os.environ.get('HF_HUB_OFFLINE')
-            if original_offline:
-                del os.environ['HF_HUB_OFFLINE']
+        except Exception as local_e:
+            # 本地失败，fallback到尝试下载
+            print(f"Local load failed: {local_e}. Falling back to download.")
             try:
                 model = SentenceTransformer(
                     model_name,
-                    cache_folder=cache_dir
+                    cache_folder=cache_dir  # 会自动下载缺失文件
                 )
-                print(f"✓ Model downloaded successfully to: {cache_dir}")
+                print(f"✓ Successfully loaded model (with download)")
                 return model
-            finally:
-                # 恢复原始离线设置
-                if original_offline:
-                    os.environ['HF_HUB_OFFLINE'] = original_offline
-        except Exception as e:
-            print(f"✗ Failed to download model: {e}")
-            print("\nTroubleshooting:")
-            print("- Check your internet connection")
-            print("- Verify the model name is correct")
-            print(f"- Try manually downloading to: {cache_dir}")
-            print("- Or disable RAG in config.yaml")
-            raise
+            except Exception as download_e:
+                # 两者失败，报错优雅退出
+                error_msg = f"Failed to load '{model_name}':\n- Local load error: {local_e}\n- Download error: {download_e}\n\n"
+                error_msg += "解决方案:\n"
+                error_msg += f"1. 手动下载模型 'sentence-transformers/{model_name}' 到缓存目录: {cache_dir}\n"
+                error_msg += "   (从 https://huggingface.co/sentence-transformers/all-mpnet-base-v2 下载文件，并放置到正确子目录)\n"
+                error_msg += "2. 或在 config.yaml 中禁用 RAG: 设置 rag.enabled: false\n"
+                error_msg += "3. 检查网络/代理设置，或使用离线环境变量: export HF_HUB_OFFLINE=1\n"
+                print(error_msg)
+                raise RuntimeError(error_msg)  # 抛出，让上层捕获并退出初始化
+
     def rebuild_index(self):
         """Clear and rebuild the entire index"""
         print("Clearing existing RAG index...")
@@ -363,6 +347,7 @@ class VectorRAG:
         except Exception as e:
             print(f"LLM call failed: {e}")
             return ''
+
     def chunk_file(self, path, chunk_size):
         """Chunk file using tree-sitter or token-based fallback"""
         lang_map = {
@@ -388,6 +373,7 @@ class VectorRAG:
                     with open(path, 'rb') as f:
                         tree = parser.parse(f.read())
                     chunks = []
+
                     def traverse(node):
                         if node.type in ['function_definition', 'class_definition',
                                          'method_definition', 'function_declaration']:
@@ -397,6 +383,7 @@ class VectorRAG:
                                 pass
                         for child in node.children:
                             traverse(child)
+
                     traverse(tree.root_node)
                     if chunks:
                         return chunks
@@ -404,20 +391,8 @@ class VectorRAG:
                 print(f"Tree-sitter parsing failed for {path}: {e}")
         # Fallback to token-based chunking
         try:
-            # Try multiple encodings
-            encodings = ['utf-8', 'gbk', 'latin-1', 'cp1252']
-            content = None
-            for encoding in encodings:
-                try:
-                    with open(path, 'r', encoding=encoding) as f:
-                        content = f.read()
-                    break
-                except UnicodeDecodeError:
-                    continue
-            # Last resort with error handling
-            if content is None:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
             # Simple chunking
             if len(content) <= chunk_size:
                 return [content] if content.strip() else []
@@ -431,6 +406,7 @@ class VectorRAG:
         except Exception as e:
             print(f"Token-based chunking failed for {path}: {e}")
             return []
+
     def setup_watcher(self):
         """Setup file system watcher for auto-refresh"""
         if not WATCHDOG_AVAILABLE:

@@ -758,7 +758,36 @@ def handle_slash_command(agent, command, mode, lang, config):
         print(" debug - Debug and fix errors")
         print(" auto - Automatically choose mode (default)")
         print(f"\nCurrent mode: {mode}")
-    elif cmd in ['quit', 'exit']:
+    elif cmd == 'chat':
+        print("\n进入临时聊天模式（不记录到上下文）。输入/exit退出。")
+        from llm import LLMClient  # 延迟导入，避免循环
+        llm = LLMClient(config['llm'])
+        conversation = []  # 本地临时历史
+        prompts = load_prompts()
+        system_msg = prompts.get('system', DEFAULT_PROMPTS['system'])
+        while True:
+            try:
+                user_input = input("You: ").strip()
+                if not user_input:
+                    continue
+                if user_input.startswith('/') and user_input[1:].lower() in ['exit', 'quit']:
+                    print("退出临时聊天模式。\n")
+                    break
+                conversation.append({"role": "user", "content": user_input})
+                messages = [{"role": "system", "content": system_msg}] + conversation
+                print("[Thinking...]")
+                response = llm.chat(messages)
+                conversation.append({"role": "assistant", "content": response})
+                print(f"Assistant: {response}\n")
+            except KeyboardInterrupt:
+                print("\n[Interrupted. Type /exit to quit chat mode]")
+                continue
+            except EOFError:
+                print("\n退出临时聊天模式。")
+                break
+            except Exception as e:
+                print(f"Error: {e}\n")
+    elif cmd in ['quit', 'exit', 'bye', '再见', '退出']:
         print("Goodbye!")
         sys.exit(0)
     else:
@@ -896,6 +925,38 @@ def interactive_chat(config):
                     print(f"Temperature: {config['llm']['temperature']}\n")
                     continue
                 elif cmd == 'model':
+                    if args:
+                        # 解析 args 为 provider,model
+                        try:
+                            provider, model = args.split(',', 1)
+                            provider = provider.strip().lower()
+                            model = model.strip()
+                        except ValueError:
+                            print(
+                                "Invalid format. Use: /model provider,model_name (e.g., /model nvidia,qwen/qwen3-next-80b-a3b-thinking)\n")
+                            continue
+
+                        # 验证是否在 config['models'] 中
+                        models_list = config.get('models', [])
+                        full_entry = f"{provider},{model}"
+                        if full_entry not in models_list:
+                            print(f"Model not found in config models list: {full_entry}\n")
+                            continue
+
+                        # 获取对应 endpoint
+                        endpoint_key = f'endpoint_{provider}'
+                        new_endpoint = config['llm'].get(endpoint_key)
+                        if not new_endpoint:
+                            print(f"No endpoint found for provider: {provider} (check config.yaml)\n")
+                            continue
+
+                        # 切换模型和 endpoint
+                        llm.model = model
+                        llm.endpoint = new_endpoint
+                        using_vision_model = False  # 假设切换均为文本模型；若 model == config['llm'].get('vision_model'), 可设为 True
+                        print(f"✓ Switched to model: {model} (provider: {provider}, endpoint: {new_endpoint})\n")
+
+                    # 无论是否切换，都打印当前信息
                     print("\n=== Model Information ===")
                     print(f"Provider: {config['llm'].get('provider', 'unknown')}")
                     print(f"Current Model: {llm.model}")
@@ -1053,7 +1114,7 @@ def main(prompt, mode, headless, lang, chat, init):
     # Create agent (only for non-chat modes)
     try:
         context_manager = ContextManager(config)
-        agent = Agent(config, prompts, context_manager, session_file=session_file)  # 传递 session_file
+        agent = Agent(config, prompts, context_manager, session_file=session_file) # 传递 session_file
     except Exception as e:
         print(f"Error initializing agent: {e}")
         import traceback

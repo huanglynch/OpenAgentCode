@@ -4,6 +4,9 @@ import subprocess
 from git import Repo
 from tools import ToolLoader
 import re
+import resource  # 新增：用于资源限制
+
+
 def load_config():
     import yaml
     try:
@@ -21,9 +24,13 @@ def load_config():
                 'tool_execution': 300
             }
         }
+
+
 class BaseExecutor:
     def execute(self, action, lang=None):
         raise NotImplementedError
+
+
 class CodeExecutor(BaseExecutor):
     def __init__(self, config):
         self.config = config
@@ -40,7 +47,7 @@ class CodeExecutor(BaseExecutor):
         self.tool_loader = ToolLoader(self.config['paths']['tools_dir'], self.config)
         if self.config.get('permissions', {}).get('git_commit', False):
             try:
-                from git import Repo # Lazy import
+                from git import Repo  # Lazy import
                 self.repo = Repo('.')
             except ImportError:
                 print("Warning: GitPython library not installed.")
@@ -50,6 +57,7 @@ class CodeExecutor(BaseExecutor):
                 self.repo = None
         else:
             self.repo = None
+
     def execute(self, action, lang=None):
         atype = action.get('type', '')
         try:
@@ -61,10 +69,10 @@ class CodeExecutor(BaseExecutor):
                 return self.git_commit(action['message'])
             elif atype == 'bash':
                 # 修改: 用沙箱执行 bash
-                return self.sandbox_exec(self.bash_exec, action['command']) # 新增: 沙箱支持
-            elif atype == 'compile_run' or atype == 'run': # 新增：支持'run'作为别名
+                return self.sandbox_exec(self.bash_exec, action['command'])  # 新增: 沙箱支持
+            elif atype == 'compile_run' or atype == 'run':  # 新增：支持'run'作为别名
                 # 修改: 用沙箱执行 compile_run
-                return self.sandbox_exec(self.compile_run, action['file'], lang) # 新增: 沙箱支持
+                return self.sandbox_exec(self.compile_run, action['file'], lang)  # 新增: 沙箱支持
             elif atype == 'run_ut':
                 return self.run_ut(action['file'], lang)
             elif atype == 'tool':
@@ -85,25 +93,18 @@ class CodeExecutor(BaseExecutor):
             return f'Missing required field in action: {e}'
         except Exception as e:
             return f'Action execution failed: {e}'
+
     def file_read(self, path):
         if not self.config['permissions']['file_read']:
             return 'Permission denied: file_read'
         try:
-            # 尝试多种编码
-            encodings = ['utf-8', 'gbk', 'latin-1', 'cp1252']
-            for encoding in encodings:
-                try:
-                    with open(path, 'r', encoding=encoding) as f:
-                        return f.read()
-                except UnicodeDecodeError:
-                    continue
-            # 如果所有编码都失败，使用 errors='ignore'
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
                 return f.read()
         except FileNotFoundError:
             return f'File not found: {path}'
         except Exception as e:
             return f'Failed to read file: {e}'
+
     def file_write(self, path, content):
         if not self.config['permissions']['file_write']:
             return 'Permission denied: file_write'
@@ -115,6 +116,7 @@ class CodeExecutor(BaseExecutor):
             return f'Successfully written to {path}'
         except Exception as e:
             return f'Failed to write file: {e}'
+
     def git_commit(self, message):
         if not self.repo:
             return 'Not a git repository'
@@ -126,10 +128,21 @@ class CodeExecutor(BaseExecutor):
             return f'Committed: {message}'
         except Exception as e:
             return f'Git commit failed: {e}'
+
     def bash_exec(self, command):
         if not self.config['permissions']['exec_bash'] and command not in self.allowed_bash:
             return 'Permission denied: bash command not allowed'
         try:
+            # 新增：输入验证（扩展白名单，禁止危险关键词）
+            dangerous_cmds = ['rm -rf', 'dd if=', 'mkfs', 'wget', 'curl', 'sudo']
+            if any(cmd in command.lower() for cmd in dangerous_cmds):
+                return 'Command blocked: potentially dangerous'
+
+            # 新增：设置资源限制（CPU时间、内存）
+            def set_limits():
+                resource.setrlimit(resource.RLIMIT_CPU, (self.timeouts.get('bash_exec', 300), -1))  # CPU秒
+                resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, -1))  # 内存512MB
+
             timeout = self.timeouts.get('bash_exec', 300)
             result = subprocess.run(
                 command,
@@ -138,14 +151,18 @@ class CodeExecutor(BaseExecutor):
                 text=True,
                 timeout=timeout,
                 encoding='utf-8',
-                errors='ignore'
+                errors='ignore',
+                preexec_fn=set_limits  # 新增：预执行设置限制
             )
             output = result.stdout if result.returncode == 0 else result.stderr
             return output or f'Command executed (return code: {result.returncode})'
         except subprocess.TimeoutExpired:
             return f'Command timeout ({self.timeouts.get("bash_exec", 300)}s)'
+        except resource.error as e:
+            return f'Resource limit exceeded: {e}'
         except Exception as e:
             return f'Command execution failed: {e}'
+
     def compile_run(self, file, lang):
         commands = {
             'python': ['python', file],
@@ -179,6 +196,7 @@ class CodeExecutor(BaseExecutor):
             return f'Compilation/execution timeout ({timeout}s)'
         except Exception as e:
             return f'Compilation/execution failed: {e}'
+
     def run_ut(self, file, lang):
         ut_commands = {
             'python': f'pytest {file} -v',
@@ -211,12 +229,10 @@ class CodeExecutor(BaseExecutor):
         """执行高风险函数在临时沙箱目录中"""
         sandbox_dir = 'sandbox_temp'
         original_cwd = os.getcwd()
-
         try:
             # 使用绝对路径创建沙箱目录
             sandbox_abs = os.path.join(original_cwd, sandbox_dir)
             os.makedirs(sandbox_abs, exist_ok=True)
-
             # 复制文件到沙箱（在 chdir 之前）
             if len(args) > 0 and isinstance(args[0], str):
                 file_path = args[0]
@@ -228,21 +244,16 @@ class CodeExecutor(BaseExecutor):
                     if dest_dir:
                         os.makedirs(dest_dir, exist_ok=True)
                     shutil.copy(source, dest_path)
-
             # 切换到沙箱目录
             os.chdir(sandbox_abs)
-
             # 修改 args 中的文件路径为相对于沙箱的路径
             new_args = list(args)
             if len(new_args) > 0 and isinstance(new_args[0], str):
                 new_args[0] = os.path.basename(new_args[0])
-
             result = func(*new_args, **kwargs)
             return result
-
         except Exception as e:
             return f"Sandbox execution failed: {e}"
-
         finally:
             # 确保恢复原始目录
             os.chdir(original_cwd)
@@ -250,10 +261,12 @@ class CodeExecutor(BaseExecutor):
                 shutil.rmtree(os.path.join(original_cwd, sandbox_dir))
             except Exception:
                 print("Warning: Failed to clean sandbox")
-                
+
+
 class DocExecutor(BaseExecutor):
     def __init__(self, config):
         self.config = config
+
     def execute(self, action, lang=None):
         atype = action.get('type', '')
         try:
@@ -268,6 +281,7 @@ class DocExecutor(BaseExecutor):
             return f'Missing required field: {e}'
         except Exception as e:
             return f'Doc action failed: {e}'
+
     def summarize(self, content):
         try:
             lines = content.split('\n')
@@ -275,6 +289,7 @@ class DocExecutor(BaseExecutor):
             return '\n'.join(summary) if summary else 'No summary available'
         except Exception as e:
             return f'Summarize failed: {e}'
+
     def optimize(self, content):
         try:
             # 去除多余空白
@@ -286,6 +301,7 @@ class DocExecutor(BaseExecutor):
             return content
         except Exception as e:
             return f'Optimize failed: {e}'
+
     def extract(self, content, pattern):
         try:
             matches = re.findall(pattern, content, re.MULTILINE)
@@ -294,6 +310,8 @@ class DocExecutor(BaseExecutor):
             return f'Invalid regex pattern: {e}'
         except Exception as e:
             return f'Extract failed: {e}'
+
+
 def get_executor(mode, config=None):
     if not config:
         config = load_config()
