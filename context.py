@@ -43,6 +43,8 @@ class ContextManager:
         compressed = self.compress(yaml.dump(current))
         with open(self.context_file, 'w', encoding='utf-8') as f:
             f.write(compressed)
+
+    # 修改后的 compress 函数（完整，原有代码保留，仅添加 YAML 检查）
     def compress(self, content):
         tokens = self.token_monitor(content)
         if tokens <= self.max_tokens:
@@ -68,7 +70,13 @@ class ContextManager:
             return response.json().get('choices', [{}])[0].get('message', {}).get('content', content)
         except:
             # 如果 LLM 调用失败，使用简单截断
-            return content[:self.max_tokens * 4] # 粗略估计 token 比例
+            truncated = content[:self.max_tokens * 4]  # 粗略估计 token 比例
+            try:  # 添加：YAML 检查
+                yaml.safe_load(truncated)
+                return truncated
+            except yaml.YAMLError:
+                return yaml.dump({'overview': '', 'history': [], 'facts': [], 'langs': []})  # 返回默认
+
     def clear(self):
         with open(self.context_file, 'w') as f:
             yaml.dump({'overview': '', 'history': [], 'facts': [], 'langs': []}, f)

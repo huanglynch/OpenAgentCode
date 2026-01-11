@@ -3,7 +3,7 @@ import os
 import importlib.util
 import subprocess
 from git import Repo
-
+import shutil
 
 try:
     from github import Github
@@ -95,11 +95,14 @@ class ToolLoader:
         except Exception as e:
             return f'Search failed: {e}'
 
+    # 修改后的 compile_lang 函数（完整，原有代码保留，仅每个分支添加 shutil.which 检查）
     def compile_lang(self, file, lang):
         """Compile source file based on language"""
         timeout = self.timeouts.get('compile', 300)
         try:
             if lang == 'cpp':
+                if not shutil.which('g++'):  # 添加：检查编译器
+                    return 'Compiler not found: g++'
                 result = subprocess.run(['g++', file, '-o', 'a.out'],
                                         capture_output=True, text=True, timeout=timeout)
                 if result.returncode == 0:
@@ -107,6 +110,8 @@ class ToolLoader:
                 else:
                     return f'Compilation failed: {result.stderr}'
             elif lang == 'c':
+                if not shutil.which('gcc'):  # 添加：检查编译器
+                    return 'Compiler not found: gcc'
                 result = subprocess.run(['gcc', file, '-o', 'a.out'],
                                         capture_output=True, text=True, timeout=timeout)
                 if result.returncode == 0:
@@ -114,6 +119,8 @@ class ToolLoader:
                 else:
                     return f'Compilation failed: {result.stderr}'
             elif lang == 'java':
+                if not shutil.which('javac'):  # 添加：检查编译器
+                    return 'Compiler not found: javac'
                 result = subprocess.run(['javac', file],
                                         capture_output=True, text=True, timeout=timeout)
                 if result.returncode == 0:
@@ -121,6 +128,8 @@ class ToolLoader:
                 else:
                     return f'Compilation failed: {result.stderr}'
             elif lang == 'cs':
+                if not shutil.which('csc'):  # 添加：检查编译器
+                    return 'Compiler not found: csc'
                 result = subprocess.run(['csc', file],
                                         capture_output=True, text=True, timeout=timeout)
                 if result.returncode == 0:

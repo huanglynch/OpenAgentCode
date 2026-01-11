@@ -166,6 +166,8 @@ class VectorRAG:
             except Exception as e:
                 print(f"FAISS index failed: {e}. Falling back to full scan.")
                 self.faiss_index = None  # 新增: FAISS 支持
+
+    # 修改后的 scan_files 函数（完整，原有代码保留，仅添加权限检查）
     def scan_files(self):
         """Scan repository for indexable files"""
         exts = ['.md', '.markdown', '.txt', '.text', '.py', '.cpp', '.h', '.cc',
@@ -173,6 +175,8 @@ class VectorRAG:
         files = []
         try:
             for root, dirs, filenames in os.walk('.'):
+                if not self.config['permissions'].get('file_read', False):  # 添加：权限检查，跳过未授权
+                    continue
                 # 规范化路径
                 root_norm = os.path.normpath(root)
                 # 跨平台检查隐藏目录
@@ -190,6 +194,7 @@ class VectorRAG:
         except Exception as e:
             print(f"File scan error: {e}")
         return files
+
     def search(self, query, top_k, mode, lang):
         """Hybrid search with semantic + BM25"""
         if not self.index:

@@ -645,6 +645,7 @@ def resolve_at_mentions(prompt):
             resolved = resolved.replace(f'@{filename}', f"[File not found: {filename}]")
     return resolved
 
+# 修改后的 handle_slash_command 函数（完整，仅修改 /write 部分）
 def handle_slash_command(agent, command, mode, lang, config):
     """Handle slash commands"""
     parts = command.split(maxsplit=1)
@@ -662,7 +663,7 @@ def handle_slash_command(agent, command, mode, lang, config):
                 print("✓ Cleared all temporary result files.")
             except Exception as e:
                 print(f"Error clearing temporary files: {e}")
-        os.makedirs(result_dir, exist_ok=True)  # 重新创建空目录
+        os.makedirs(result_dir, exist_ok=True) # 重新创建空目录
         print("✓ Context cleared.")
     elif cmd == 'context':
         context = agent.context_manager.load()
@@ -695,6 +696,9 @@ def handle_slash_command(agent, command, mode, lang, config):
         if not args:
             print("Usage: /write <filename>")
             print("Enter content (end with Ctrl+D on Unix or Ctrl+Z on Windows):")
+            return
+        if not config['permissions'].get('allow_write', False):  # 添加：权限检查
+            print("Permission denied: file write not allowed")
             return
         print(f"Enter content for {args} (end with Ctrl+D or Ctrl+Z):")
         try:
@@ -760,9 +764,9 @@ def handle_slash_command(agent, command, mode, lang, config):
         print(f"\nCurrent mode: {mode}")
     elif cmd == 'chat':
         print("\n进入临时聊天模式（不记录到上下文）。输入/exit退出。")
-        from llm import LLMClient  # 延迟导入，避免循环
+        from llm import LLMClient # 延迟导入，避免循环
         llm = LLMClient(config['llm'])
-        conversation = []  # 本地临时历史
+        conversation = [] # 本地临时历史
         prompts = load_prompts()
         system_msg = prompts.get('system', DEFAULT_PROMPTS['system'])
         while True:
@@ -794,6 +798,7 @@ def handle_slash_command(agent, command, mode, lang, config):
         print(f"Unknown command: /{cmd}")
         print("Type /help for available commands")
 
+# 修改后的 interactive_mode 函数（完整，原有代码保留，仅添加类型检查）
 def interactive_mode(agent, mode, headless, lang, config):
     """Interactive REPL mode"""
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -818,11 +823,11 @@ def interactive_mode(agent, mode, headless, lang, config):
                 print(json.dumps(result, indent=2))
             else:
                 # Fixed handling for dict result
-                if isinstance(result, dict):
+                if isinstance(result, dict):  # 添加：类型检查
                     output = result.get('plan', '') + '\n\n' + result.get('output', '')
-                    print("\n" + format_markdown(output))
                 else:
-                    print("\n" + format_markdown(str(result))) # Fallback
+                    output = str(result)
+                print("\n" + format_markdown(output))
             print()
         except KeyboardInterrupt:
             print("\n[Interrupted. Type /quit to exit]")
@@ -835,6 +840,7 @@ def interactive_mode(agent, mode, headless, lang, config):
             import traceback
             traceback.print_exc()
 
+# 修改后的 interactive_chat 函数（完整，原有代码保留，仅添加 image 检查）
 def interactive_chat(config):
     """Simple chat interface without tool execution"""
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -935,27 +941,23 @@ def interactive_chat(config):
                             print(
                                 "Invalid format. Use: /model provider,model_name (e.g., /model nvidia,qwen/qwen3-next-80b-a3b-thinking)\n")
                             continue
-
                         # 验证是否在 config['models'] 中
                         models_list = config.get('models', [])
                         full_entry = f"{provider},{model}"
                         if full_entry not in models_list:
                             print(f"Model not found in config models list: {full_entry}\n")
                             continue
-
                         # 获取对应 endpoint
                         endpoint_key = f'endpoint_{provider}'
                         new_endpoint = config['llm'].get(endpoint_key)
                         if not new_endpoint:
                             print(f"No endpoint found for provider: {provider} (check config.yaml)\n")
                             continue
-
                         # 切换模型和 endpoint
                         llm.model = model
                         llm.endpoint = new_endpoint
-                        using_vision_model = False  # 假设切换均为文本模型；若 model == config['llm'].get('vision_model'), 可设为 True
+                        using_vision_model = False # 假设切换均为文本模型；若 model == config['llm'].get('vision_model'), 可设为 True
                         print(f"✓ Switched to model: {model} (provider: {provider}, endpoint: {new_endpoint})\n")
-
                     # 无论是否切换，都打印当前信息
                     print("\n=== Model Information ===")
                     print(f"Provider: {config['llm'].get('provider', 'unknown')}")
@@ -1017,17 +1019,23 @@ def interactive_chat(config):
                     if valid_images >= 2:
                         break
                     ext = os.path.splitext(image_path)[1].lower().lstrip('.')
-                    if ext in ['jpg', 'jpeg', 'png', 'gif'] and os.path.exists(image_path):
-                        with open(image_path, "rb") as image_file:
-                            base64_image = base64.b64encode(image_file.read()).decode('utf-8')
-                        mime_type = f"image/{ext if ext != 'jpg' else 'jpeg'}"
-                        content.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}
-                        })
-                        valid_images += 1
-                    else:
-                        print(f"Invalid or unsupported image: {image_path}")
+                    try:  # 添加：try-except 跳过无效
+                        if ext in ['jpg', 'jpeg', 'png', 'gif'] and os.path.exists(image_path):
+                            if os.path.getsize(image_path) > 10 * 1024 * 1024:  # 添加：大小检查 <10MB
+                                print(f"Image too large (over 10MB): {image_path}")
+                                continue
+                            with open(image_path, "rb") as image_file:
+                                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+                            mime_type = f"image/{ext if ext != 'jpg' else 'jpeg'}"
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime_type};base64,{base64_image}"}
+                            })
+                            valid_images += 1
+                        else:
+                            print(f"Invalid or unsupported image: {image_path}")
+                    except Exception as e:
+                        print(f"Error processing image {image_path}: {e}")
                 if valid_images == 0:
                     continue
                 # 切换到视觉模型

@@ -1,10 +1,21 @@
+# executor.py (代码执行器) - 跨平台兼容版本
 import os
 import shutil
 import subprocess
 from git import Repo
 from tools import ToolLoader
 import re
-import resource  # 新增：用于资源限制
+import sys
+
+# 跨平台资源限制：仅在 Unix 系统导入 resource
+RESOURCE_AVAILABLE = False
+if sys.platform != 'win32':
+    try:
+        import resource
+
+        RESOURCE_AVAILABLE = True
+    except ImportError:
+        pass
 
 
 def load_config():
@@ -69,10 +80,10 @@ class CodeExecutor(BaseExecutor):
                 return self.git_commit(action['message'])
             elif atype == 'bash':
                 # 修改: 用沙箱执行 bash
-                return self.sandbox_exec(self.bash_exec, action['command'])  # 新增: 沙箱支持
-            elif atype == 'compile_run' or atype == 'run':  # 新增：支持'run'作为别名
+                return self.sandbox_exec(self.bash_exec, action['command'])
+            elif atype == 'compile_run' or atype == 'run':  # 支持'run'作为别名
                 # 修改: 用沙箱执行 compile_run
-                return self.sandbox_exec(self.compile_run, action['file'], lang)  # 新增: 沙箱支持
+                return self.sandbox_exec(self.compile_run, action['file'], lang)
             elif atype == 'run_ut':
                 return self.run_ut(action['file'], lang)
             elif atype == 'tool':
@@ -130,44 +141,58 @@ class CodeExecutor(BaseExecutor):
             return f'Git commit failed: {e}'
 
     def bash_exec(self, command):
-        if not self.config['permissions']['exec_bash'] and command not in self.allowed_bash:
+        if not self.config['permissions']['exec_bash'] and command.split()[0] not in self.allowed_bash:
             return 'Permission denied: bash command not allowed'
         try:
-            # 新增：输入验证（扩展白名单，禁止危险关键词）
-            dangerous_cmds = ['rm -rf', 'dd if=', 'mkfs', 'wget', 'curl', 'sudo']
+            # 输入验证（禁止危险关键词）
+            dangerous_cmds = ['rm -rf', 'dd if=', 'mkfs', 'wget', 'curl', 'sudo', 'format', 'del /s']
             if any(cmd in command.lower() for cmd in dangerous_cmds):
                 return 'Command blocked: potentially dangerous'
 
-            # 新增：设置资源限制（CPU时间、内存）
-            def set_limits():
-                resource.setrlimit(resource.RLIMIT_CPU, (self.timeouts.get('bash_exec', 300), -1))  # CPU秒
-                resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, -1))  # 内存512MB
-
             timeout = self.timeouts.get('bash_exec', 300)
-            result = subprocess.run(
-                command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                encoding='utf-8',
-                errors='ignore',
-                preexec_fn=set_limits  # 新增：预执行设置限制
-            )
+
+            # 跨平台执行：Windows 使用 cmd，Unix 使用 shell
+            if sys.platform == 'win32':
+                # Windows: 不支持 preexec_fn，直接执行
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    encoding='utf-8',
+                    errors='ignore'
+                )
+            else:
+                # Unix: 可以设置资源限制
+                def set_limits():
+                    if RESOURCE_AVAILABLE:
+                        resource.setrlimit(resource.RLIMIT_CPU, (timeout, -1))  # CPU秒
+                        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, -1))  # 内存512MB
+
+                result = subprocess.run(
+                    command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    encoding='utf-8',
+                    errors='ignore',
+                    preexec_fn=set_limits if RESOURCE_AVAILABLE else None
+                )
+
             output = result.stdout if result.returncode == 0 else result.stderr
             return output or f'Command executed (return code: {result.returncode})'
         except subprocess.TimeoutExpired:
             return f'Command timeout ({self.timeouts.get("bash_exec", 300)}s)'
-        except resource.error as e:
-            return f'Resource limit exceeded: {e}'
         except Exception as e:
             return f'Command execution failed: {e}'
 
     def compile_run(self, file, lang):
         commands = {
             'python': ['python', file],
-            'cpp': f'g++ {file} -o a.out && ./a.out',
-            'c': f'gcc {file} -o a.out && ./a.out',
+            'cpp': f'g++ {file} -o a.out && ./a.out' if sys.platform != 'win32' else f'g++ {file} -o a.exe && a.exe',
+            'c': f'gcc {file} -o a.out && ./a.out' if sys.platform != 'win32' else f'gcc {file} -o a.exe && a.exe',
             'js': ['node', file],
             'java': f'javac {file} && java {os.path.splitext(os.path.basename(file))[0]}',
             'cs': f'csc {file} && {os.path.splitext(file)[0]}.exe',
@@ -200,7 +225,7 @@ class CodeExecutor(BaseExecutor):
     def run_ut(self, file, lang):
         ut_commands = {
             'python': f'pytest {file} -v',
-            'cpp': f'./{file}',
+            'cpp': f'./{file}' if sys.platform != 'win32' else file,
             'java': f'java -cp .:junit.jar org.junit.runner.JUnitCore {os.path.splitext(os.path.basename(file))[0]}',
             'js': f'npm test {file}',
             'go': f'go test {file}',
@@ -233,6 +258,7 @@ class CodeExecutor(BaseExecutor):
             # 使用绝对路径创建沙箱目录
             sandbox_abs = os.path.join(original_cwd, sandbox_dir)
             os.makedirs(sandbox_abs, exist_ok=True)
+
             # 复制文件到沙箱（在 chdir 之前）
             if len(args) > 0 and isinstance(args[0], str):
                 file_path = args[0]
@@ -244,12 +270,15 @@ class CodeExecutor(BaseExecutor):
                     if dest_dir:
                         os.makedirs(dest_dir, exist_ok=True)
                     shutil.copy(source, dest_path)
+
             # 切换到沙箱目录
             os.chdir(sandbox_abs)
+
             # 修改 args 中的文件路径为相对于沙箱的路径
             new_args = list(args)
             if len(new_args) > 0 and isinstance(new_args[0], str):
                 new_args[0] = os.path.basename(new_args[0])
+
             result = func(*new_args, **kwargs)
             return result
         except Exception as e:
@@ -261,6 +290,13 @@ class CodeExecutor(BaseExecutor):
                 shutil.rmtree(os.path.join(original_cwd, sandbox_dir))
             except Exception:
                 print("Warning: Failed to clean sandbox")
+            # 如果目录仍存在且空，尝试 rmdir
+            sandbox_abs = os.path.join(original_cwd, sandbox_dir)
+            if os.path.exists(sandbox_abs) and not os.listdir(sandbox_abs):
+                try:
+                    os.rmdir(sandbox_abs)
+                except Exception:
+                    pass
 
 
 class DocExecutor(BaseExecutor):

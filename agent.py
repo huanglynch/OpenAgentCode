@@ -8,8 +8,6 @@ import os
 import yaml
 import time # 新增: 用于限流
 import datetime # 新增: 用于时间戳文件名
-
-
 class Agent:
     def __init__(self, config, prompts, context_manager, session_file=None):
         self.config = config
@@ -28,7 +26,6 @@ class Agent:
         self.metrics_log = os.path.join(self.original_cwd, 'logs', 'oac_metrics.json')
         os.makedirs(os.path.join(self.original_cwd, 'logs'), exist_ok=True)
         self.metrics = []
-
     def infer(self, task, mode='code', lang=None, depth=0): # Added depth param
         if depth > 5: # Prevent recursion depth issues
             return {'plan': 'Max recursion depth reached', 'output': 'Aborted sub-tasks'}
@@ -165,7 +162,6 @@ class Agent:
         self.metrics.append(metrics_entry)
         self.save_metrics()
         return result
-
     # 新增: ReAct 循环方法
     def react_loop(self, task, mode, lang, context, injected_rag, depth):
         """ReAct 框架：Reason + Act + Observe 循环，直到任务完成"""
@@ -209,12 +205,10 @@ class Agent:
         update_data = {'task': task, 'plan': plan, 'results': output_str}
         self.context_manager.update(update_data)
         return {'plan': plan, 'output': output_str}
-
     # 新增: 检查结果是否明显错误的方法（简单关键词检查，可扩展）
     def check_result(self, output_str):
-        error_keywords = ["error:", "failed:", "exception:", "aborted", "permission denied"]
+        error_keywords = ["error:", "failed:", "exception:", "aborted", "permission denied", "syntax error", "runtime error"]
         return not any(keyword.lower() in output_str.lower() for keyword in error_keywords)
-
     def save_result_to_file(self, output_str):
         # 修改: 使用绝对路径
         result_dir = os.path.join(self.original_cwd, 'result')
@@ -232,7 +226,6 @@ class Agent:
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(output_str)
             print(f"Result saved to: {filepath}")
-
     # 新增: 保存指标日志
     def save_metrics(self):
         """追加指标到 JSON 文件"""
@@ -248,7 +241,6 @@ class Agent:
             print(f"Metrics logged to {self.metrics_log}")
         except Exception as e:
             print(f"Metrics logging failed: {e}") # 新增: 评估指标
-
     def build_prompt(self, task, mode, lang, context, injected_rag):
         base = self.prompts.get('base_prompt', '').format(
             mode=mode,
@@ -281,7 +273,6 @@ class Agent:
         if mode == 'auto':
             base += "\n" + self.prompts.get('decompose_task', '').format(query=task)
         return base
-
     def optimize_prompt(self, original_prompt):
         """Use LLM to optimize the prompt for better effectiveness."""
         if 'optimize_prompt' not in self.prompts:
@@ -294,7 +285,6 @@ class Agent:
             return improved
         else:
             return original_prompt
-
     def inject_rag_results(self, paths):
         injected = []
         for path in paths:
@@ -312,7 +302,6 @@ class Agent:
                 print(f"Warning: Failed to inject {path}: {e}")
                 continue
         return '\n'.join(injected)
-
     def call_llm(self, prompt):
         """Enhanced LLM call with NVIDIA thinking model support and retry logic"""
         import time
@@ -419,6 +408,7 @@ class Agent:
                 else:
                     return f"Error: Unexpected error after {max_retries} attempts: {e}"
         return "Error: Failed to get response after all retry attempts"
+
     def parse_output(self, response):
         """Enhanced output parsing with better error handling"""
         if not response or not response.strip():
@@ -432,12 +422,15 @@ class Agent:
                 # New: Handle sub_tasks if present
                 sub_tasks = parsed.get('sub_tasks', [])
                 if sub_tasks:
-                    sub_results = [self.infer(t, mode='auto', lang=self.detect_language(t), depth=self.current_depth + 1) for t in sub_tasks] # 顺序执行子任务
+                    sub_results = [
+                        self.infer(t, mode='auto', lang=self.detect_language(t), depth=self.current_depth + 1) for t in
+                        sub_tasks]  # 顺序执行子任务
                     # 合并结果（按顺序）
                     sub_outputs = [r.get('output', '') for r in sub_results]
                     # 直接附加到plan作为描述（不作为action）
                     parsed[
-                        'plan'] += f"\nSub-tasks executed: {len(sub_tasks)}\nSub-results:\n{' '.join(sub_outputs)}" # <-- 改这里
+                        'plan'] += f"\nSub-tasks executed: {len(sub_tasks)}\nSub-results:\n{' '.join(sub_outputs)}"  # <-- 改这里
+                    parsed['output'] = '\n'.join(sub_outputs)
                 # 新增: 检查 ReAct 'done' 字段
                 parsed['done'] = parsed.get('done', False)
                 return parsed
@@ -497,7 +490,7 @@ class Agent:
             # 新增：智能推断执行动作，如果响应包含代码且任务涉及运行
             import re
             if 'print(' in response and ('run' in self.current_task.lower() or '执行' in self.current_task.lower()):
-                code_match = re.search(r'```python\n(.*?)\n```', response, re.DOTALL)
+                code_match = re.search(r'```python\s*\n(.*?)```', response, re.DOTALL)  # 修复：添加了完整的正则表达式
                 if code_match:
                     code = code_match.group(1).strip()
                     temp_path = 'temp_exec.py'
@@ -506,9 +499,10 @@ class Agent:
         # 新增：如果响应提到'execute'或'run'，添加compile_run（假设文件已写）
         if ('execute' in response.lower() or 'run' in response.lower()) and any(
                 a['type'] == 'file_write' for a in actions):
-            file_path = actions[0].get('path', 'output.py') # 假设第一个write是代码文件
+            file_path = actions[0].get('path', 'output.py')  # 假设第一个write是代码文件
             actions.append({'type': 'compile_run', 'file': file_path, 'lang': 'python'})
         return {'plan': plan, 'actions': actions}
+
     def detect_language(self, task):
         """Enhanced language detection"""
         exts = {
